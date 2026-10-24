@@ -1,0 +1,8 @@
+/Debug-lib
+__pycache__/
+.venv*/
+config.txt
+history.txt
+.env
+.env.*
+!.env.example
