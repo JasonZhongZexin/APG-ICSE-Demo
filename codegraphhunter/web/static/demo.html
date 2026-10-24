@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>CodeGraphHunter · Existing DB Demo</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="CodeGraphHunter home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span>CodeGraph<span>Hunter</span></span>
+        </a>
+        <div class="topbar-right">
+          <nav class="mode-nav" aria-label="Analysis modes">
+            <a href="/">Build DB</a>
+            <a class="active" href="/demo">Existing DB demo</a>
+          </nav>
+          <div id="healthBadge" class="health-badge checking"><span></span>Checking environment</div>
+        </div>
+      </header>
+
+      <nav class="graph-menu" aria-label="Graph query pages">
+        <span class="graph-menu-label">GRAPH WORKSPACE</span>
+        <a class="active" href="/demo">Demo overview</a>
+        <a href="/query/icfg"><i>01</i> Query on ICFG</a>
+        <a href="/query/pag"><i>02</i> Query on PAG</a>
+        <a href="/query/callgraph"><i>03</i> Query on CallGraph</a>
+        <a id="navCapabilities" href="/query/capabilities"><i>04</i> All capabilities</a>
+        <span class="prototype-tag">QUERY WORKSPACE</span>
+      </nav>
+
+      <section class="hero demo-hero">
+        <div class="eyebrow"><span>DEMO</span> CPP-HTTPLIB END-TO-END REPAIR</div>
+        <h1>Localize. Patch.<br /><em>Validate the repair.</em></h1>
+        <p>Run the prepared embedded-NUL path demo against the existing graph databases, generate a source patch, and validate the patched behavior.</p>
+      </section>
+
+      <section class="workspace">
+        <form id="runForm" class="input-panel" data-mode="demo">
+          <div class="panel-heading">
+            <div><span class="section-number">DEMO CASE / 01</span><h2>cpp-httplib #1765</h2></div>
+            <span class="local-only">FIXED REPRODUCTION</span>
+          </div>
+
+          <input id="testCasePath" type="hidden" value="/tmp/codegraphhunter_swe/yhirose__cpp-httplib-1765" />
+          <input id="problemPath" type="hidden" value="/tmp/codegraphhunter_swe/yhirose__cpp-httplib-1765/.codegraphhunter/problem_statement.txt" />
+
+          <div class="demo-case-card">
+            <div><span>BUG</span><b>Embedded NUL bytes are accepted as valid paths</b></div>
+            <div><span>TARGET</span><code>httplib::detail::is_valid_path</code></div>
+            <div><span>SCRIPT</span><code>/tmp/cgh_demo_cpphttplib_full_patch.sh</code></div>
+            <div><span>OUTPUT</span><code>/tmp/cgh_demo_cpphttplib_final</code></div>
+          </div>
+
+          <div id="formError" class="form-error" role="alert"></div>
+          <div class="submit-row">
+            <p><span>✓</span> The generated patch, test logs, full pipeline log, and per-step summaries will appear below.</p>
+            <button id="submitButton" class="primary-button" type="submit"><span>Run full demo</span><i aria-hidden="true">→</i></button>
+          </div>
+        </form>
+
+        <aside class="flow-panel" aria-label="Demo pipeline">
+          <span class="section-number">PIPELINE / 02</span>
+          <h2>Repair pipeline</h2>
+          <ol>
+            <li><span>1</span><div><b>Localize with graph evidence</b><small>PAG · ICFG · CallGraph</small></div></li>
+            <li><span>2</span><div><b>Generate source patch</b><small>final_patch.diff</small></div></li>
+            <li><span>3</span><div><b>Apply in clean worktree</b><small>isolated patch validation</small></div></li>
+            <li><span>4</span><div><b>Run post-patch test</b><small>embedded NUL rejection</small></div></li>
+          </ol>
+          <div class="source-note"><span>NOTE</span><p>The script recreates its fixed output and worktree directories under <code>/tmp</code> on every run.</p></div>
+        </aside>
+      </section>
+
+      <section id="resultPanel" class="result-panel hidden" aria-live="polite">
+        <div class="result-header">
+          <div><span class="section-number">RUNTIME / 03</span><h2>Analysis progress</h2></div>
+          <div class="runtime-actions">
+            <span id="statusBadge" class="status-badge">Queued</span>
+            <button id="cancelButton" class="cancel-button" type="button">Cancel job</button>
+          </div>
+        </div>
+        <div class="summary-grid">
+          <div><span>Current stage</span><b id="stageValue">—</b></div>
+          <div><span>Candidate function</span><b id="functionValue">—</b></div>
+          <div><span>Candidate file</span><b id="fileValue">—</b></div>
+          <div><span>Stop reason</span><b id="reasonValue">—</b></div>
+        </div>
+        <div class="repo-line"><span>Test case directory</span><code id="repoValue">—</code></div>
+        <div class="artifact-shell">
+          <div class="artifact-heading">
+            <div><span class="section-number">DEMO OUTPUTS</span><h3>Patch, logs, and intermediate summaries</h3></div>
+            <span id="artifactCount" class="artifact-count">0 FILES</span>
+          </div>
+          <div class="artifact-workspace">
+            <div id="artifactList" class="artifact-list"><div class="artifact-empty">The patch, validation logs, pipeline logs, and intermediate summaries will appear here when the script completes.</div></div>
+            <div class="artifact-viewer">
+              <div class="artifact-viewer-bar">
+                <div><span id="artifactKind">PREVIEW</span><b id="artifactName">Select a summary file</b></div>
+                <span id="artifactSize">—</span>
+              </div>
+              <pre id="artifactContent">Choose an artifact on the left to inspect its contents. The final diff opens automatically.</pre>
+            </div>
+          </div>
+          <div class="artifact-location"><span>Artifact directory</span><code id="artifactDirectory">—</code></div>
+        </div>
+        <div class="log-shell">
+          <div class="log-toolbar"><span><i></i> LIVE OUTPUT</span><button id="clearLog" type="button">Clear view</button></div>
+          <pre id="logOutput" tabindex="0"></pre>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="fileDialog" class="file-dialog">
+      <div class="dialog-header">
+        <div><span class="section-number">PATH SELECTOR</span><h2>Select a server path</h2></div>
+        <button id="closeDialog" type="button" aria-label="Close">×</button>
+      </div>
+      <div class="dialog-path">
+        <button id="parentDirectory" type="button" aria-label="Parent directory">↑</button>
+        <code id="currentDirectory"></code>
+        <button id="selectDirectory" class="select-directory hidden" type="button">Select this folder</button>
+      </div>
+      <div id="fileList" class="file-list"></div>
+      <div id="dialogError" class="form-error"></div>
+    </dialog>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,88 @@
+{
+  "version": "inheritance_labels.v1",
+  "notes": "Authoritative inheritance mapping: child_label -> base_label. Labels not listed here are treated as roots (no base).",
+  "abstract_types": {
+    "ICFGNode": {
+        "properties": ["id", "kind", "pag_edge_ids", "source_loc", "chnodes_ids","cha_vtbls_ids"]
+    },
+    "ICFGEdge":{
+        "properties": ["kind"]
+    },
+    "SVFType":{
+        "properties": ["id", "svf_i8_type_id","svf_ptr_type_id","kind","is_single_val_ty","byte_size"]
+    }
+},
+  "extends": {
+    "ValVar": "SVFVar",
+    "ObjVar": "SVFVar",
+    "ArgValVar": "ValVar",
+    "GepValVar":"ValVar",
+    "BaseObjVar":"ObjVar",
+    "GepObjVar":"ObjVar",
+    "HeapObjVar":"BaseObjVar",
+    "StackObjVar":"BaseObjVar",
+    "FunObjVar":"BaseObjVar",
+    "FunValVar":"ValVar",
+    "GlobalValVar":"ValVar",
+    "ConstAggValVar":"ValVar",
+    "ConstDataValVar":"ValVar",
+    "BlackHoleValVar":"ConstDataValVar",
+    "ConstFPValVar":"ConstDataValVar",
+    "ConstIntValVar":"ConstDataValVar",
+    "ConstNullPtrValVar":"ConstDataValVar",
+    "GlobalObjVar":"BaseObjVar",
+    "ConstAggObjVar":"BaseObjVar",
+    "ConstDataObjVar":"BaseObjVar",
+    "ConstFPObjVar":"ConstDataObjVar",
+    "ConstIntObjVar":"ConstDataObjVar",
+    "ConstNullPtrObjVar":"ConstDataObjVar",
+    "RetValPN":"ValVar",
+    "VarArgValPN":"ValVar",
+    "DummyValVar":"ValVar",
+    "DummyObjVar":"BaseObjVar",
+    
+    "AssignStmt":"SVFStmt",
+    "AddrStmt":"AssignStmt",
+    "CopyStmt":"AssignStmt",
+    "LoadStmt":"AssignStmt",
+    "StoreStmt":"AssignStmt",
+    "GepStmt":"AssignStmt",
+    "CallPE":"AssignStmt",
+    "RetPE":"AssignStmt",
+    "MultiOpndStmt":"SVFStmt",
+    "PhiStmt":"MultiOpndStmt",
+    "SelectStmt":"MultiOpndStmt",
+    "CmpStmt":"MultiOpndStmt",
+    "BinaryOPStmt":"MultiOpndStmt",
+    "UnaryOPStmt":"SVFStmt",
+    "BranchStmt":"SVFStmt",
+    "TDForkPE":"CallPE",
+    "RetPETDJoinPE":"RetPE",
+
+
+
+    "GlobalICFGNode": "ICFGNode",
+    "IntraICFGNode": "ICFGNode",
+    "InterICFGNode": "ICFGNode",
+    "FunEntryICFGNode": "InterICFGNode",
+    "FunExitICFGNode": "InterICFGNode",
+    "CallICFGNode": "InterICFGNode",
+    "RetICFGNode": "InterICFGNode",
+
+
+    "IntraCFGEdge":"ICFGEdge",
+    "CallCFGEdge":"ICFGEdge",   
+    "RetCFGEdge":"ICFGEdge",
+
+
+
+
+    "SVFPointerType":"SVFType",
+    "SVFIntegerType":"SVFType",
+    "SVFFunctionType":"SVFType",
+    "SVFStructType":"SVFType",
+    "SVFArrayType":"SVFType",
+    "SVFOtherType":"SVFType"
+
+  }
+}

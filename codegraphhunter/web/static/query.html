@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>CodeGraphHunter · Graph Query</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/graph-view.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="CodeGraphHunter home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span>CodeGraph<span>Hunter</span></span>
+        </a>
+        <div class="topbar-right">
+          <nav class="mode-nav" aria-label="Analysis modes">
+            <a href="/">Build DB</a>
+            <a class="active" href="/demo">Existing DB demo</a>
+          </nav>
+          <div id="backendStatus" class="prototype-status"><span></span>Backend disconnected</div>
+        </div>
+      </header>
+
+      <nav class="graph-menu" aria-label="Graph query pages">
+        <span class="graph-menu-label">GRAPH WORKSPACE</span>
+        <a href="/demo">Demo overview</a>
+        <a id="navIcfg" href="/query/icfg"><i>01</i> Query on ICFG</a>
+        <a id="navPag" href="/query/pag"><i>02</i> Query on PAG</a>
+        <a id="navCallgraph" href="/query/callgraph"><i>03</i> Query on CallGraph</a>
+        <a id="navCapabilities" href="/query/capabilities"><i>04</i> All capabilities</a>
+        <span id="workspaceModeTag" class="prototype-tag">CONSTRAINED BACKEND</span>
+      </nav>
+
+      <section class="query-hero">
+        <div>
+          <div class="eyebrow"><span id="graphIndex">01</span> NATURAL-LANGUAGE GRAPH QUERY</div>
+          <h1>Ask the <em id="graphTitle">ICFG</em><br />in plain English.</h1>
+        </div>
+        <p id="graphDescription">Describe the graph evidence you need. The backend creates a constrained plan, validates the generated Cypher, and queries TuGraph.</p>
+      </section>
+
+      <section class="query-flow" aria-label="Query workflow" aria-busy="false">
+        <div class="flow-node active" data-flow="request"><span>1</span><b>Natural language</b><small>User intent</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-node" data-flow="schema"><span>2</span><b>Schema grounding</b><small>Labels &amp; properties</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-node" data-flow="matching"><span>3</span><b>Capability matching</b><small>Match the user intent</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-node" data-flow="compiling"><span>4</span><b>Guarded query</b><small>Compile &amp; validate</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-node" data-flow="applying"><span>5</span><b>Apply capability</b><small>Retrieve the evidence</small></div>
+        <i aria-hidden="true">→</i>
+        <div class="flow-node" data-flow="result"><span>6</span><b>Query result</b><small>All paths &amp; records</small></div>
+        <p id="queryFlowStatus" class="query-flow-status" role="status">Ready to match your request to a capability.</p>
+      </section>
+
+      <section class="query-layout">
+        <div class="query-main">
+          <form id="queryForm" class="query-composer">
+            <div class="query-panel-heading">
+              <div><span class="section-number">QUERY / 01</span><h2>Describe what you want to find</h2></div>
+              <div class="query-panel-actions">
+                <span id="graphBadge" class="graph-badge">ICFG</span>
+                <button id="openQueryHelp" class="query-help-button" type="button" aria-haspopup="dialog" aria-controls="queryHelpDialog"><span class="query-help-mark" aria-hidden="true">?</span>Help</button>
+              </div>
+            </div>
+            <p id="queryCapabilityHint" class="query-capability-hint">The selected model automatically chooses a capability based on your request.</p>
+            <div class="query-limits" role="group" aria-label="Query limits">
+              <div class="query-limit-field">
+                <label for="queryMaxDepth">Max depth (hops)</label>
+                <input id="queryMaxDepth" name="max_depth" type="number" inputmode="numeric" min="1" step="1" placeholder="No hop limit" aria-describedby="queryLimitHint" />
+              </div>
+              <div class="query-limit-field">
+                <label for="queryMaxEntities">Max entities</label>
+                <input id="queryMaxEntities" name="max_entities" type="number" inputmode="numeric" min="1" max="1000" step="1" placeholder="1000 (default)" aria-describedby="queryLimitHint" />
+              </div>
+            </div>
+            <p id="queryLimitHint" class="query-limit-hint">Leave depth blank for no hop limit, or enter a positive whole number for multi-hop queries. Leave entity limit blank for up to 1000 records, or enter 1–1000. For multi-hop queries, each distinct path counts as one result.</p>
+            <label for="naturalQuery">Natural-language request</label>
+            <textarea id="naturalQuery" rows="6" placeholder="Describe the graph evidence you want to retrieve…" required></textarea>
+            <div class="example-block">
+              <span>TRY AN EXAMPLE</span>
+              <div id="exampleQueries" class="example-queries"></div>
+            </div>
+            <div id="queryError" class="form-error" role="alert"></div>
+            <div class="query-submit-row">
+              <div class="prototype-note"><span>i</span><p id="prototypeNoteText">The selected model creates a strict query plan. The backend validates the generated Cypher before querying TuGraph.</p></div>
+              <button id="previewQuery" class="primary-button" type="submit"><span>Run constrained query</span><i>→</i></button>
+            </div>
+          </form>
+
+          <section id="usedCapability" class="query-capability-used" data-state="waiting" aria-label="Capability used for this query" aria-live="polite" aria-atomic="true">
+            <div class="capability-used-heading"><span>CAPABILITY USED</span><b id="usedCapabilityStatus">WAITING</b></div>
+            <code id="usedCapabilityId">Not selected yet</code>
+            <h3 id="usedCapabilityTitle">Submit a query to select a capability</h3>
+            <p id="usedCapabilityDescription">The model's choice will appear here for this query.</p>
+            <button id="usedCapabilityHelp" class="query-help-button hidden" type="button" aria-haspopup="dialog" aria-controls="queryHelpDialog">View capability help</button>
+          </section>
+
+          <section class="generated-query-panel">
+            <div class="code-panel-bar">
+              <div><span class="section-number">GENERATED CYPHER / 02</span><b id="cypherStatus">Waiting for a request</b></div>
+              <button id="copyCypher" type="button">Copy</button>
+            </div>
+            <pre id="cypherOutput"><code>// Generated Cypher will appear here after you run the query.</code></pre>
+            <div class="query-params-row">
+              <span>BOUND PARAMETERS</span>
+              <code id="queryParams">No parameters have been bound.</code>
+            </div>
+            <div class="query-guard-row">
+              <span><i></i> SchemaGuard</span>
+              <b id="guardStatus">NOT EVALUATED</b>
+              <span><i></i> Read-only</span>
+              <b>ENFORCED</b>
+            </div>
+          </section>
+
+          <section class="query-results-panel">
+            <div class="results-heading">
+              <div><span class="section-number">QUERY RESULTS / 03</span><h2>Retrieved evidence</h2></div>
+              <div><span id="resultMode" class="mock-badge">LIVE RESULT</span><b id="resultCount">0 records</b></div>
+            </div>
+            <div id="capabilityReport" class="query-analysis hidden" role="status"></div>
+            <section id="queryLocalSummary" class="query-local-summary hidden" aria-labelledby="localSummaryTitle" aria-live="polite">
+              <div class="local-summary-heading"><h3 id="localSummaryTitle">Local summary</h3><b id="localSummaryStatus"></b></div>
+              <p id="localSummaryScope" class="local-summary-scope">Query-wide summary of all returned results.</p>
+              <p id="localSummaryModel" class="local-summary-model"></p>
+              <p id="localSummaryMessage" class="local-summary-message"></p>
+              <p id="localSummaryOverview"></p>
+              <ul id="localSummaryFindings" class="local-summary-findings"></ul>
+              <details id="localSummaryLimits" class="local-summary-limits hidden" open>
+                <summary>Limitations</summary><ul id="localSummaryLimitations"></ul>
+              </details>
+              <p id="localSummaryCoverage" class="local-summary-coverage"></p>
+            </section>
+            <div id="resultEmpty" class="result-empty">
+              <span class="empty-graph-mark">⌁</span>
+              <b>No query results yet</b>
+              <p>Submit a natural-language request to generate Cypher and retrieve graph evidence from TuGraph.</p>
+            </div>
+            <div id="evidencePaths" class="evidence-paths hidden">
+              <div class="paths-heading"><b>Retrieved paths</b><span id="pathCount"></span></div>
+              <p id="pathListNote" class="path-list-note"></p>
+              <div id="pathList"></div>
+            </div>
+            <div id="evidenceGraph" class="evidence-graph hidden">
+              <div class="graph-toolbar">
+                <div><b id="graphViewTitle">Graph view</b><span id="graphStats" aria-live="polite"></span></div>
+                <div class="graph-actions" aria-label="Graph controls">
+                  <button id="graphZoomOut" type="button" aria-label="Zoom out">−</button>
+                  <output id="graphZoom" aria-live="polite">100%</output>
+                  <button id="graphZoomIn" type="button" aria-label="Zoom in">+</button>
+                  <button id="graphFit" type="button">Fit</button>
+                  <button id="graphLayout" type="button">Re-layout</button>
+                </div>
+              </div>
+              <div class="graph-workspace">
+                <div id="graphCanvas" class="graph-canvas">
+                  <svg id="graphSvg" role="group" aria-label="Query evidence graph. Drag nodes to arrange, drag the background to pan, and scroll to zoom." tabindex="0"></svg>
+                  <p id="graphUnavailable" class="graph-unavailable hidden">These records contain no node IDs. Inspect the records table below.</p>
+                  <span class="graph-gesture-hint">Drag nodes · Pan background · Scroll to zoom</span>
+                </div>
+                <aside class="graph-inspector" aria-label="Selected graph element">
+                  <div class="graph-inspector-heading"><b id="graphSelectionTitle">Properties</b><button id="graphClearSelection" type="button" class="hidden" aria-label="Clear graph selection">×</button></div>
+                  <p id="graphSelectionHint">Select a node or link to inspect its properties and matching records.</p>
+                  <dl id="graphProperties"></dl>
+                </aside>
+              </div>
+              <div id="graphLegend" class="graph-legend" aria-label="Node label colors"></div>
+              <p id="graphEvidenceNote" class="graph-evidence-note"></p>
+              <div id="pathSteps" class="path-steps hidden"><b>Every hop</b><ol id="pathHopList"></ol></div>
+            </div>
+            <details id="resultTableWrap" class="result-records hidden">
+              <summary>Records table <span id="tableRecordCount"></span></summary>
+              <div class="result-table-wrap"><table id="resultTable"></table></div>
+            </details>
+          </section>
+        </div>
+
+        <aside class="schema-panel">
+          <div class="schema-heading"><span class="section-number">SCHEMA CONTEXT</span><h2 id="schemaTitle">ICFG schema</h2></div>
+          <p>The query planner uses these allowed labels and relationships as grounding context.</p>
+          <div class="schema-group"><span>NODE LABELS</span><div id="nodeLabels" class="schema-pills"></div></div>
+          <div class="schema-group"><span>EDGE LABELS</span><div id="edgeLabels" class="schema-pills edges"></div></div>
+          <div class="schema-group"><span>USEFUL PROPERTIES</span><div id="propertyLabels" class="schema-properties"></div></div>
+          <div class="schema-policy">
+            <span>GUARD POLICY</span>
+            <ul>
+              <li>Read-only Cypher only</li>
+              <li>Known labels and properties</li>
+              <li>Optional traversal depth limit</li>
+              <li>Mandatory result limit</li>
+            </ul>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <dialog id="queryHelpDialog" class="query-help-dialog" aria-labelledby="queryHelpTitle" aria-describedby="queryHelpIntro">
+      <div class="query-help-header">
+        <div><span class="section-number">QUERY HELP</span><h2 id="queryHelpTitle">Supported capabilities</h2></div>
+        <button id="closeQueryHelp" class="query-help-close" type="button" aria-label="Close query help">×</button>
+      </div>
+      <div class="query-help-controls">
+        <p id="queryHelpIntro">Describe what you want to find. The selected model chooses a capability automatically. Examples use cpp-httplib; replace function names and node IDs with values from your graph.</p>
+        <label for="queryHelpSearch">Search capabilities</label>
+        <input id="queryHelpSearch" type="search" placeholder="Search by name, capability ID, or example" autocomplete="off" autofocus />
+        <p class="query-help-limits">Depth and result limits apply to the returned evidence. Missing data or a reached limit can produce an empty or partial result.</p>
+        <p id="queryHelpStatus" role="status">Open Help to view supported capabilities.</p>
+        <button id="retryQueryHelp" class="query-help-button hidden" type="button">Try again</button>
+      </div>
+      <div id="queryHelpContent" class="query-help-content"></div>
+    </dialog>
+    <script src="/assets/query-capabilities.js" defer></script>
+    <script src="/assets/query-limits.js" defer></script>
+    <script src="/assets/query-request.js" defer></script>
+    <script src="/assets/query-flow.js" defer></script>
+    <script src="/assets/query-local-summary.js" defer></script>
+    <script src="/assets/graph-view.js" defer></script>
+    <script src="/assets/query.js" defer></script>
+  </body>
+</html>

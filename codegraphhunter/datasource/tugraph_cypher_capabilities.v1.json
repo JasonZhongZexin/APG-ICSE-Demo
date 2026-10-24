@@ -1,0 +1,132 @@
+{
+  "version": "tugraph_cypher_capabilities.v1",
+  "source": "TuGraph 4.5.2 Cypher support (screenshots) + query-safe built-in procedures (curated)",
+  "cypher": {
+    "clauses": {
+      "MATCH": "supported",
+      "OPTIONAL MATCH": "supported",
+      "MANDATORY MATCH": "pending",
+
+      "RETURN": "supported",
+      "WITH": "supported",
+      "UNWIND": "supported",
+
+      "WHERE": "supported",
+      "ORDER BY": "supported",
+      "SKIP": "supported",
+      "LIMIT": "supported",
+
+      "CALL": "supported",
+
+      "UNION": "pending",
+      "UNION ALL": "supported"
+    },
+    "operators": {
+      "DISTINCT": "supported",
+      "DOT_PROPERTY_ACCESS": "supported",
+      "BRACKET_DYNAMIC_PROPERTY_ACCESS": "pending",
+
+      "MATH": ["+", "-", "*", "/", "%", "^"],
+      "COMPARE": ["=", "<>", "<", ">", "<=", ">=", "IS NULL", "IS NOT NULL"],
+      "STRING_COMPARE": ["STARTS WITH", "ENDS WITH", "CONTAINS", "REGEXP"],
+      "BOOLEAN": ["AND", "OR", "XOR", "NOT"],
+      "STRING_CONCAT": ["+"],
+      "LIST": {
+        "CONCAT": ["+"],
+        "IN": "supported",
+        "BRACKET_ELEMENT_ACCESS": "supported"
+      }
+    },
+    "functions": {
+      "supported": [
+        "exists", "date", "datetime",
+        "id", "euid", "properties", "head", "last",
+        "toBoolean", "toFloat", "toInteger", "toString",
+        "type", "startnode", "endnode",
+        "size", "length",
+        "substring", "concat",
+        "label",
+        "avg", "collect", "count", "max", "min",
+        "percentileCont", "percentileDisc",
+        "stDev", "stDevP",
+        "variance", "varianceP",
+        "sum",
+        "keys", "labels", "nodes", "range",
+        "abs", "ceil", "floor", "rand", "round", "sign",
+        "/"
+      ],
+      "not_supported": [
+        "all", "any", "single", "none", "subscript"
+      ]
+    },
+    "semantic_constraints": {
+      "exactly_one_label_per_node": true,
+      "exactly_one_label_per_relationship": true,
+      "no_label_is_error": true,
+      "multiple_labels_pick_first": true,
+      "projection_alias_must_not_shadow_pattern_variable": true,
+      "strong_schema": true
+    }
+  },
+
+  "procedures": {
+    "supports_call_yield": true,
+    "builtin_signatures": {
+      "db.subgraph": "db.subgraph(vids::LIST) :: (subgraph::STRING)",
+
+      "db.vertexLabels": "db.vertexLabels() :: (label::STRING)",
+      "db.edgeLabels": "db.edgeLabels() :: (edgeLabels::STRING)",
+      "db.indexes": "db.indexes() :: (label::STRING,field::STRING,label_type:STRING,unique::BOOLEAN,pair_unique::BOOLEAN)",
+      "db.listLabelIndexes": "db.listLabelIndexes(label_name:STRING,label_type:STRING) :: (label::STRING,field::STRING,unique::BOOLEAN,pair_unique::BOOLEAN)",
+
+      "db.getLabelSchema": "db.getLabelSchema(label_type::STRING,label_name::STRING) :: (name::STRING,type::STRING,optional::BOOLEAN)",
+      "db.getVertexSchema": "db.getVertexSchema(label::STRING) :: (schema::MAP)",
+      "db.getEdgeSchema": "db.getEdgeSchema(label::STRING) :: (schema::MAP)",
+
+      "dbms.procedures": "dbms.procedures() :: (name::STRING,signature::STRING)",
+
+      "dbms.graph.listGraphs": "dbms.graph.listGraphs() :: (graph_name::STRING,configuration::MAP)",
+      "dbms.graph.getGraphInfo": "dbms.graph.getGraphInfo(graph_name::STRING)::(graph_name::STRING,configuration::MAP)",
+
+      "dbms.config.list": "dbms.config.list() :: (name::STRING,value::ANY)",
+
+      "db.dbms.meta.count": "db.dbms.meta.count() :: (type::STRING, number::INTEGER)",
+      "db.dbms.meta.countDetail": "db.dbms.meta.countDetail() :: (is_vertex::BOOLEAN, label::STRING, count::INTEGER)",
+
+      "dbms.task.listTasks": "dbms.task.listTasks()::(tasks::LIST)",
+      "dbms.ha.clusterInfo": "dbms.ha.clusterInfo() :: (cluster_info::LIST, is_master::BOOLEAN)",
+
+      "algo.shortestPath": "algo.shortestPath(startNode::NODE,endNode::NODE,config::MAP) :: (nodeCount::INTEGER,totalCost::FLOAT)",
+      "algo.allShortestPaths": "algo.allShortestPaths(startNode::NODE,endNode::NODE,config::MAP) :: (nodeIds::LIST,relationshipIds::LIST,cost::LIST)",
+      "algo.native.extract": "algo.native.extract(id::ANY,config::MAP) :: (value::ANY)"
+    },
+
+    "groups": {
+      "readonly_introspection": [
+        "db.vertexLabels",
+        "db.edgeLabels",
+        "db.indexes",
+        "db.listLabelIndexes",
+        "db.getLabelSchema",
+        "db.getVertexSchema",
+        "db.getEdgeSchema",
+        "dbms.procedures",
+        "dbms.graph.listGraphs",
+        "dbms.graph.getGraphInfo",
+        "dbms.config.list",
+        "db.dbms.meta.count",
+        "db.dbms.meta.countDetail",
+        "dbms.task.listTasks",
+        "dbms.ha.clusterInfo"
+      ],
+      "graph_algorithms": [
+        "algo.shortestPath",
+        "algo.allShortestPaths",
+        "algo.native.extract"
+      ],
+      "graph_data_export": [
+        "db.subgraph"
+      ]
+    }
+  }
+}

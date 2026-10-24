@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>CodeGraphHunter · Fault Localization</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="CodeGraphHunter home">
+          <span class="brand-mark" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i>
+          </span>
+          <span>CodeGraph<span>Hunter</span></span>
+        </a>
+        <div class="topbar-right">
+          <nav class="mode-nav" aria-label="Analysis modes">
+            <a class="active" href="/">Build DB</a>
+            <a href="/demo">Existing DB demo</a>
+          </nav>
+          <div id="healthBadge" class="health-badge checking">
+            <span></span>Checking environment
+          </div>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="eyebrow"><span>01</span> GRAPH-GUIDED FAULT LOCALIZATION</div>
+        <h1>Two paths.<br /><em>One fault to trace.</em></h1>
+        <p>Build the program graph and use the problem statement to locate candidate source files and functions automatically. Model credentials and database settings remain on the server.</p>
+      </section>
+
+      <section class="workspace">
+        <form id="runForm" class="input-panel" data-mode="build">
+          <div class="panel-heading">
+            <div>
+              <span class="section-number">INPUT / 01</span>
+              <h2>Analysis inputs</h2>
+            </div>
+            <span class="local-only">LOCAL ONLY</span>
+          </div>
+
+          <label class="path-field" for="bcPath">
+            <span class="field-label"><b>BITCODE</b> LLVM bitcode path</span>
+            <span class="input-row">
+              <span class="file-symbol bc">BC</span>
+              <input id="bcPath" name="bc_path" type="text" autocomplete="off" placeholder="/path/to/program.bc" required />
+              <button class="browse-button" type="button" data-target="bcPath" data-kind="bc">Browse</button>
+            </span>
+          </label>
+
+          <label class="path-field" for="problemPath">
+            <span class="field-label"><b>CONTEXT</b> Problem statement path</span>
+            <span class="input-row">
+              <span class="file-symbol doc">PS</span>
+              <input id="problemPath" name="problem_path" type="text" autocomplete="off" placeholder="/path/to/problem_statement.txt" required />
+              <button class="browse-button" type="button" data-target="problemPath" data-kind="problem">Browse</button>
+            </span>
+          </label>
+
+          <div id="formError" class="form-error" role="alert"></div>
+          <div class="submit-row">
+            <p><span>!</span> Submitting refreshes the current TuGraph data. Only one analysis can run at a time.</p>
+            <button id="submitButton" class="primary-button" type="submit">
+              <span>Start analysis</span><i aria-hidden="true">→</i>
+            </button>
+          </div>
+        </form>
+
+        <aside class="flow-panel" aria-label="Analysis pipeline">
+          <span class="section-number">PIPELINE / 02</span>
+          <h2>Analysis pipeline</h2>
+          <ol>
+            <li><span>1</span><div><b>Build program graph</b><small>graphdb-wpa · TuGraph</small></div></li>
+            <li><span>2</span><div><b>Interpret the problem</b><small>intent · information needs</small></div></li>
+            <li><span>3</span><div><b>Localize and retrieve</b><small>PAG · ICFG · CallGraph</small></div></li>
+          </ol>
+          <div class="source-note">
+            <span>AUTO</span>
+            <p>The source root is inferred from the Git repository containing the <code>.bc</code> file.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section id="resultPanel" class="result-panel hidden" aria-live="polite">
+        <div class="result-header">
+          <div>
+            <span class="section-number">RUNTIME / 03</span>
+            <h2>Analysis progress</h2>
+          </div>
+          <div class="runtime-actions">
+            <span id="statusBadge" class="status-badge">Queued</span>
+            <button id="cancelButton" class="cancel-button" type="button">Cancel job</button>
+          </div>
+        </div>
+        <div class="summary-grid">
+          <div><span>Current stage</span><b id="stageValue">—</b></div>
+          <div><span>Candidate function</span><b id="functionValue">—</b></div>
+          <div><span>Candidate file</span><b id="fileValue">—</b></div>
+          <div><span>Stop reason</span><b id="reasonValue">—</b></div>
+        </div>
+        <div class="repo-line"><span>Source repository</span><code id="repoValue">—</code></div>
+        <div class="artifact-shell">
+          <div class="artifact-heading">
+            <div>
+              <span class="section-number">STEP SUMMARIES</span>
+              <h3>Generated artifacts</h3>
+            </div>
+            <span id="artifactCount" class="artifact-count">0 FILES</span>
+          </div>
+          <div class="artifact-workspace">
+            <div id="artifactList" class="artifact-list">
+              <div class="artifact-empty">Summary files will appear here as each step completes.</div>
+            </div>
+            <div class="artifact-viewer">
+              <div class="artifact-viewer-bar">
+                <div><span id="artifactKind">PREVIEW</span><b id="artifactName">Select a summary file</b></div>
+                <span id="artifactSize">—</span>
+              </div>
+              <pre id="artifactContent">Choose an artifact on the left to inspect its contents.</pre>
+            </div>
+          </div>
+          <div class="artifact-location"><span>Artifact directory</span><code id="artifactDirectory">—</code></div>
+        </div>
+        <div class="log-shell">
+          <div class="log-toolbar"><span><i></i> LIVE OUTPUT</span><button id="clearLog" type="button">Clear view</button></div>
+          <pre id="logOutput" tabindex="0"></pre>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="fileDialog" class="file-dialog">
+      <div class="dialog-header">
+        <div><span class="section-number">PATH SELECTOR</span><h2>Select a server file</h2></div>
+        <button id="closeDialog" type="button" aria-label="Close">×</button>
+      </div>
+      <div class="dialog-path">
+        <button id="parentDirectory" type="button" aria-label="Parent directory">↑</button>
+        <code id="currentDirectory"></code>
+        <button id="selectDirectory" class="select-directory hidden" type="button">Select this folder</button>
+      </div>
+      <div id="fileList" class="file-list"></div>
+      <div id="dialogError" class="form-error"></div>
+    </dialog>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

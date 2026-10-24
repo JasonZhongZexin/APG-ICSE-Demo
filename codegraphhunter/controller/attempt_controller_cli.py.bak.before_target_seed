@@ -1,0 +1,1237 @@
+# -*- coding: utf-8 -*-
+from __future__ import print_function
+
+import os
+import argparse
+import json
+import random
+import re
+from typing import Any, Dict, Optional, Tuple, Union, List
+
+from codegraphhunter.state.retrieval_state import RetrievalState, RetrievalBudgets, is_unlimited
+from codegraphhunter.controller.attempt_controller import AttemptController, AttemptStopReasons
+from codegraphhunter.catalog.schema_guard import SchemaGuard
+from codegraphhunter.query.guard import QueryGuard
+
+from codegraphhunter.ir.graph_query_plan import GraphQueryPlan
+from codegraphhunter.summarizer.local_summary_builder import LocalSummaryBuilder
+from codegraphhunter.summarizer.global_summary_builder import GlobalSummaryBuilder
+from codegraphhunter.summarizer.llm_local_summary_refiner import LLMLocalSummaryRefiner
+from codegraphhunter.repair.llm_patch_generator import LLMPatchGenerator
+from codegraphhunter.repair.patch_validator import PatchValidator
+from codegraphhunter.agents.retrieval_planner import RetrievalPlannerAgent
+from codegraphhunter.agents.db_query_agent import DBQueryAgent
+from codegraphhunter.datasource.bolt_client import BoltClient
+
+
+DST_NODE_LABEL_DEFAULT = "IntraICFGNode"
+DEFAULT_SEMANTICS_CATALOG = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "resources",
+    "graph_semantics_catalog.v1.json",
+)
+
+# =================================================
+# (A) normalized_schema helpers (schema-driven needs)
+# =================================================
+
+def load_normalized_schema_or_exit(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception as e:
+        raise SystemExit("ERROR: normalized_schema load failed: %s (%s)" % (path, e))
+
+    if not isinstance(obj, dict) or not obj:
+        raise SystemExit("ERROR: normalized_schema must be a non-empty JSON object: %s" % path)
+    return obj
+
+
+def _schema_graphs(normalized_schema_obj: Dict[str, Any]) -> Dict[str, Any]:
+    graphs = normalized_schema_obj.get("graphs")
+    if not isinstance(graphs, dict) or not graphs:
+        raise SystemExit("ERROR: normalized_schema missing top-level 'graphs' dict")
+    return graphs
+
+
+def _normalize_graph_type_for_schema(graph_type: str) -> str:
+    if graph_type is None:
+        return "ICFG"
+    gt = str(graph_type).strip()
+    up = gt.upper()
+
+    if up == "CALLGRAPH":
+        return "CallGraph"
+    if up in ("TYPEGRAPH", "SVFTYPE", "SVFTYPEGRAPH"):
+        return "TypeGraph"
+    if up in ("BASICBLOCK", "BASICBLOCKGRAPH"):
+        return "BasicBlock"
+
+    if up in ("PAG", "ICFG", "CHG"):
+        return up
+
+    if gt in ("CallGraph", "TypeGraph", "BasicBlock"):
+        return gt
+
+    return gt
+
+
+def _graph_cfg_from_schema(normalized_schema_obj: Dict[str, Any], graph_type: str) -> Dict[str, Any]:
+    graphs = _schema_graphs(normalized_schema_obj)
+    key = _normalize_graph_type_for_schema(graph_type)
+
+    if key not in graphs:
+        raise SystemExit(
+            "ERROR: graph_type=%r not found in normalized_schema.graphs keys=%r"
+            % (graph_type, sorted(list(graphs.keys())))
+        )
+
+    cfg = graphs[key]
+    node_labels = cfg.get("node_labels") or []
+    edge_labels = cfg.get("edge_labels") or []
+
+    if not isinstance(node_labels, list) or not node_labels:
+        raise SystemExit("ERROR: normalized_schema.graphs[%s].node_labels empty" % key)
+    if not isinstance(edge_labels, list):
+        raise SystemExit("ERROR: normalized_schema.graphs[%s].edge_labels must be list" % key)
+
+    return {"schema_graph_key": key, "node_labels": node_labels, "edge_labels": edge_labels}
+
+
+def _pick_seed_label(schema_graph_key: str, node_labels: List[str]) -> str:
+    if schema_graph_key == "ICFG":
+        if "FunExitICFGNode" in node_labels:
+            return "FunExitICFGNode"
+        if "FunEntryICFGNode" in node_labels:
+            return "FunEntryICFGNode"
+        return node_labels[0]
+
+    if schema_graph_key == "CallGraph":
+        return "CallGraphNode" if "CallGraphNode" in node_labels else node_labels[0]
+
+    if schema_graph_key == "CHG":
+        return "CHNode" if "CHNode" in node_labels else node_labels[0]
+
+    if schema_graph_key == "BasicBlock":
+        return "SVFBasicBlock" if "SVFBasicBlock" in node_labels else node_labels[0]
+
+    if schema_graph_key == "TypeGraph":
+        return "SVFPointerType" if "SVFPointerType" in node_labels else node_labels[0]
+
+    return node_labels[0]
+
+
+def _pick_dst_label(schema_graph_key: str, node_labels: List[str], dst_label_cli: str) -> Optional[str]:
+    if dst_label_cli and dst_label_cli in node_labels:
+        return dst_label_cli
+
+    if schema_graph_key == "ICFG":
+        return "IntraICFGNode" if "IntraICFGNode" in node_labels else node_labels[0]
+
+    return node_labels[0]
+
+
+def schema_driven_needs(
+    normalized_schema_obj: Dict[str, Any],
+    state: RetrievalState,
+    stage: str,
+    dst_label_cli: str,
+    graph_type_hint: Optional[str] = None,
+    relax_traversal: bool = False,
+) -> Dict[str, Any]:
+    graph_types = ["PAG", "ICFG", "CALLGRAPH"]
+
+    if graph_type_hint:
+        graph_type = graph_type_hint
+    else:
+        idx = int(getattr(state, "rr_graph_idx", 0))
+        graph_type = graph_types[idx % len(graph_types)]
+        state.rr_graph_idx = idx + 1
+
+    cfg = _graph_cfg_from_schema(normalized_schema_obj, graph_type)
+    schema_graph_key = cfg["schema_graph_key"]
+    node_labels = cfg["node_labels"]
+    edge_labels = cfg["edge_labels"]
+
+    seed_label = _pick_seed_label(schema_graph_key, node_labels)
+    dst_label = _pick_dst_label(schema_graph_key, node_labels, dst_label_cli)
+
+    if relax_traversal and (str(graph_type).upper() in ("PAG", "ICFG")):
+        edge_types = ["*"]
+        dst_label = None
+    else:
+        if edge_labels:
+            edge_types = [str(edge_labels[0])]
+        else:
+            edge_types = []
+
+    return {
+        "task_id": "T1",
+        "graph_type": str(graph_type),
+        "edge_types": edge_types,
+        "direction": "out",
+        "objective": "reach_target_node",
+        "seed": {"label": seed_label, "id": 1},
+        "requested_depth": 10 if stage == "init" else 6,
+        "dst_label": dst_label,
+    }
+
+
+# =================================================
+# (B) TuGraph subgraph switching (graph_type -> DB)
+# =================================================
+
+GRAPH_TYPE_TO_TUGRAPH_GRAPH = {
+    "PAG": "PAG",
+    "ICFG": "ICFG",
+    "CALLGRAPH": "CallGraph",
+    "CHG": "CHG",
+    "BASICBLOCK": "BasicBlockGraph",
+    "SVFTYPE": "SVFType",
+    "CallGraph": "CallGraph",
+    "BasicBlockGraph": "BasicBlockGraph",
+    "SVFType": "SVFType",
+}
+
+
+def tugraph_db_for_graph_type(graph_type: str, fallback: str) -> str:
+    if not graph_type:
+        return fallback
+    gt = str(graph_type).strip()
+    if gt in GRAPH_TYPE_TO_TUGRAPH_GRAPH:
+        return GRAPH_TYPE_TO_TUGRAPH_GRAPH[gt]
+    up = gt.upper()
+    return GRAPH_TYPE_TO_TUGRAPH_GRAPH.get(up, fallback)
+
+
+class BoltRouter(object):
+    def __init__(self, uri: str, user: str, password: str):
+        self.uri = uri
+        self.user = user
+        self.password = password
+        self._clients: Dict[str, BoltClient] = {}
+
+    def get(self, dbname: str) -> BoltClient:
+        db = str(dbname)
+        if db not in self._clients:
+            self._clients[db] = BoltClient(
+                uri=self.uri,
+                user=self.user,
+                password=self.password,
+                database=db,
+            )
+        return self._clients[db]
+
+    def close(self):
+        for _, c in list(self._clients.items()):
+            try:
+                c.close()
+            except Exception:
+                pass
+        self._clients.clear()
+
+
+# =================================================
+# (C) Legacy planner + fake exec (kept for regression)
+# =================================================
+
+def fake_retrieval_planner_dict(state: RetrievalState, stage: str) -> Dict[str, Any]:
+    graph_types = ["PAG", "ICFG", "CALLGRAPH"]
+    graph_type = graph_types[(state.counters.replans + state.counters.queries_total) % len(graph_types)]
+    return {
+        "task_id": "T1",
+        "graph_type": graph_type,
+        "objective": "reach_target_node",
+        "seed": {"label": "FunExitICFGNode", "id": 1},
+        "requested_depth": 10 if stage == "init" else 6,
+        "dst_label": DST_NODE_LABEL_DEFAULT,
+    }
+
+
+def render_query_from_plan_legacy(plan: Dict[str, Any], depth: int, dst_node_label: Optional[str]) -> str:
+    label = plan["seed"]["label"]
+    nid = int(plan["seed"]["id"])
+    dst_label = dst_node_label or DST_NODE_LABEL_DEFAULT
+    edge_label = "SVFStmt"
+    return (
+        "MATCH (n:%s {id: %d})-[:%s*1..%d]->(m:%s) "
+        "RETURN n, m LIMIT 3"
+        % (label, nid, edge_label, int(depth), dst_label)
+    )
+
+
+def fake_executor(validated_query: str) -> Dict[str, Any]:
+    depth = 1
+    m = re.search(r"\*1\.\.(\d+)", validated_query)
+    if m:
+        try:
+            depth = int(m.group(1))
+        except Exception:
+            depth = 1
+
+    coverage = min(1.0, 0.15 * depth + random.random() * 0.05)
+    hit_cap = (depth >= 6 and random.random() < 0.3)
+
+    return {
+        "ok": True,
+        "subgraph_meta": {
+            "num_nodes": min(500, 50 * depth),
+            "num_edges": min(2000, 200 * depth),
+            "hit_cap": hit_cap,
+            "coverage": coverage,
+            "depth": depth,
+        },
+    }
+
+
+def fake_local_summarizer(subgraph_meta: Dict[str, Any]) -> Dict[str, Any]:
+    ok = (float(subgraph_meta.get("coverage", 0.0)) >= 0.65) and (not bool(subgraph_meta.get("hit_cap", False)))
+    return {
+        "objective_met": bool(ok),
+        "insufficient_context": not bool(ok),
+        "signals": {
+            "coverage": subgraph_meta.get("coverage"),
+            "hit_cap": subgraph_meta.get("hit_cap"),
+        },
+    }
+
+def query_budget_exhausted(state) -> bool:
+    """
+    Return True only when the total query budget is finite and already exhausted.
+    -1 means unlimited.
+    """
+    max_q = getattr(state.budgets, "max_queries_total", None)
+    if max_q is None:
+        return False
+    if int(max_q) < 0:
+        return False
+    return int(state.counters.queries_total) >= int(max_q)
+
+def plan_to_payload_any(plan: Any) -> Dict[str, Any]:
+    if isinstance(plan, dict):
+        return plan
+    if hasattr(plan, "model_dump"):
+        return plan.model_dump()
+    if hasattr(plan, "dict"):
+        return plan.dict()
+    return {"repr": repr(plan)}
+
+
+BuiltQuery = Union[str, Tuple[str, Dict[str, Any]]]
+
+
+def _split_built_query(built: BuiltQuery) -> Tuple[str, Optional[Dict[str, Any]]]:
+    if isinstance(built, tuple):
+        if len(built) != 2:
+            raise SystemExit("ERROR: build_query returned tuple of len != 2")
+        cypher, params = built
+        if not isinstance(cypher, str):
+            raise SystemExit("ERROR: build_query returned non-str cypher in tuple")
+        if params is not None and not isinstance(params, dict):
+            raise SystemExit("ERROR: build_query returned non-dict params")
+        return cypher, params
+    if not isinstance(built, str):
+        raise SystemExit("ERROR: build_query must return str or (str, dict)")
+    return built, None
+
+
+def build_query_or_exit(db_agent: DBQueryAgent, plan: GraphQueryPlan, depth: int, dst_node_label: Optional[str]) -> BuiltQuery:
+    if not hasattr(db_agent, "build_query"):
+        raise SystemExit("ERROR: DBQueryAgent must implement build_query(plan, depth, dst_label).")
+    return db_agent.build_query(plan, depth, dst_node_label)
+
+
+# =================================================
+# (D) Normalize LIMIT (TuGraph safe)
+# =================================================
+
+_LIMIT_CLAUSE_RE = re.compile(r"(?is)\s+\blimit\b\s+[^\s;]+")
+
+
+def normalize_limit_and_params(
+    cypher: str,
+    params: Optional[Dict[str, Any]],
+    max_limit: int,
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    if not isinstance(cypher, str):
+        return cypher, params
+
+    s = cypher.strip()
+    if not s:
+        return cypher, params
+
+    has_semicolon = s.endswith(";")
+    if has_semicolon:
+        s = s[:-1].rstrip()
+
+    s = _LIMIT_CLAUSE_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = "%s LIMIT %d" % (s, int(max_limit))
+
+    if has_semicolon:
+        s = s + ";"
+
+    if isinstance(params, dict):
+        params = dict(params)
+        for k in ("limit", "LIMIT", "max_limit", "row_limit"):
+            params.pop(k, None)
+
+    return s, params
+
+
+# =================================================
+# (E) DB exec + retry on label error
+# =================================================
+
+_LABEL_NOT_EXIST_PATTERNS = [
+    "No such vertex label",
+    "No such edge label",
+    "No such label",
+]
+
+
+def execute_real_db_or_exit(
+    bolt: BoltClient,
+    cypher: str,
+    params: Optional[Dict[str, Any]],
+    timeout_s: int,
+) -> Dict[str, Any]:
+    try:
+        out = bolt.run(cypher, params=params, timeout_s=timeout_s)
+        records = out.get("records") or []
+        return {"ok": True, "records": records}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def maybe_drop_dst_label_on_label_error(cypher: str, err: str) -> Optional[str]:
+    if not isinstance(err, str) or not err:
+        return None
+    if not any(p in err for p in _LABEL_NOT_EXIST_PATTERNS):
+        return None
+
+    rewritten = re.sub(r"\(m\s*:\s*[A-Za-z_][A-Za-z0-9_]*\)", "(m)", cypher, count=1)
+    if rewritten != cypher:
+        return rewritten
+    return None
+
+
+# =================================================
+# (F) Logging helpers
+# =================================================
+
+def _safe_json(obj: Any) -> str:
+    try:
+        return json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        try:
+            return json.dumps(str(obj), ensure_ascii=False)
+        except Exception:
+            return "<unserializable>"
+
+
+def _print_db_debug(
+    enabled: bool,
+    phase: str,
+    dbname: str,
+    cypher: str,
+    params: Optional[Dict[str, Any]],
+    records: Optional[List[Dict[str, Any]]] = None,
+    max_records: int = 3,
+) -> None:
+    if not enabled:
+        return
+    print("\n[DB DEBUG] phase=%s db=%s" % (phase, dbname))
+    print("[DB DEBUG] cypher=%s" % cypher)
+    if params:
+        print("[DB DEBUG] params=%s" % _safe_json(params))
+    else:
+        print("[DB DEBUG] params={} ")
+    if records is not None:
+        show = records[:max(0, int(max_records))]
+        print("[DB DEBUG] records_preview(n=%d of %d)=%s" % (len(show), len(records), _safe_json(show)))
+
+
+# =================================================
+# (G) Seed discovery (optional)
+# =================================================
+
+def discover_seed_id(
+    bolt: BoltClient,
+    dbname: str,
+    seed_label: str,
+    timeout_s: int,
+    debug: bool = False,
+    print_records: bool = False,
+    print_records_max: int = 3,
+) -> Optional[Any]:
+    label = str(seed_label).strip()
+    if not label:
+        return None
+
+    candidates = [
+        ("id", "MATCH (n:%s) RETURN n.id AS id LIMIT 1" % label),
+        ("_id", "MATCH (n:%s) RETURN n._id AS id LIMIT 1" % label),
+        ("node_id", "MATCH (n:%s) RETURN n.node_id AS id LIMIT 1" % label),
+    ]
+
+    for prop_name, cy in candidates:
+        _print_db_debug(
+            enabled=bool(debug),
+            phase="SEED_DISCOVERY(%s)" % prop_name,
+            dbname=str(dbname),
+            cypher=cy,
+            params=None,
+            records=None,
+        )
+        out = execute_real_db_or_exit(bolt, cy, params=None, timeout_s=int(timeout_s))
+        if not out.get("ok"):
+            continue
+        recs = out.get("records") or []
+        if int(print_records):
+            _print_db_debug(
+                enabled=True,
+                phase="SEED_DISCOVERY_RESULT(%s)" % prop_name,
+                dbname=str(dbname),
+                cypher=cy,
+                params=None,
+                records=recs,
+                max_records=int(print_records_max),
+            )
+        if recs:
+            v = recs[0].get("id", None)
+            if v is not None:
+                return v
+    return None
+
+
+def maybe_apply_seed_discovery_to_needs(
+    needs: Dict[str, Any],
+    bolt_router: Optional["BoltRouter"],
+    default_db: str,
+    timeout_s: int,
+    debug: bool,
+    print_records: bool,
+    print_records_max: int,
+) -> Dict[str, Any]:
+    if not needs or not bolt_router:
+        return needs
+
+    seed = needs.get("seed") or {}
+    seed_label = str(seed.get("label", "")).strip()
+    if not seed_label:
+        return needs
+
+    graph_type = str(needs.get("graph_type", "")).strip()
+    want_db = tugraph_db_for_graph_type(graph_type, fallback=str(default_db))
+    bolt = bolt_router.get(want_db)
+
+    sid = discover_seed_id(
+        bolt=bolt,
+        dbname=want_db,
+        seed_label=seed_label,
+        timeout_s=int(timeout_s),
+        debug=bool(debug),
+        print_records=bool(print_records),
+        print_records_max=int(print_records_max),
+    )
+    if sid is not None:
+        needs = dict(needs)
+        seed2 = dict(seed)
+        seed2["id"] = sid
+        needs["seed"] = seed2
+        print("[SEED] graph_type=%s db=%s label=%s -> id=%s" % (graph_type, want_db, seed_label, str(sid)))
+    else:
+        print("[SEED] graph_type=%s db=%s label=%s -> id NOT FOUND (keep id=%s)" %
+              (graph_type, want_db, seed_label, str(seed.get("id"))))
+    return needs
+
+
+def _print_stop_report(state: RetrievalState) -> None:
+    r = state.stop_reason or "UNKNOWN"
+
+    if r == AttemptStopReasons.OBJECTIVE_MET:
+        print("\n[STOP REPORT] reason=OBJECTIVE_MET")
+        return
+
+    if r == AttemptStopReasons.REPLAN_LIMIT_REACHED:
+        print("\n[STOP REPORT] reason=REPLAN_LIMIT_REACHED (max_replans=%s)" % str(state.budgets.max_replans))
+        return
+
+    if r == AttemptStopReasons.DEPTH_INCREASE_LIMIT_REACHED:
+        print("\n[STOP REPORT] reason=DEPTH_INCREASE_LIMIT_REACHED (max_depth_increases_per_task=%s)" %
+              str(state.budgets.max_depth_increases_per_task))
+        return
+
+    if r == AttemptStopReasons.QUERY_BUDGET_EXHAUSTED:
+        print("\n[STOP REPORT] reason=QUERY_BUDGET_EXHAUSTED (queries_total=%d max_queries_total=%s)" %
+              (state.counters.queries_total, str(state.budgets.max_queries_total)))
+        return
+
+    print("\n[STOP REPORT] reason=%s" % r)
+
+def _read_optional_text_file(path: str) -> str:
+    if not path:
+        return ""
+    if not os.path.isfile(path):
+        raise SystemExit("ERROR: file not found: %s" % path)
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+# =================================================
+# (H0) Patch generation / validation helpers
+# =================================================
+
+def _get_artifact_field(artifacts: Any, name: str, default: Any = None) -> Any:
+    if isinstance(artifacts, dict):
+        return artifacts.get(name, default)
+    return getattr(artifacts, name, default)
+
+
+def _read_patch_source_or_exit(target_repo: str, rel_source_file: str) -> str:
+    if not target_repo:
+        raise SystemExit("ERROR: --use-llm-patch requires --patch-target-repo")
+    if not rel_source_file:
+        raise SystemExit("ERROR: --use-llm-patch requires --patch-source-file")
+
+    repo = os.path.abspath(target_repo)
+    path = os.path.abspath(os.path.join(repo, rel_source_file))
+
+    if not path.startswith(repo + os.sep) and path != repo:
+        raise SystemExit("ERROR: patch source file escapes target repo: %s" % rel_source_file)
+
+    if not os.path.isfile(path):
+        raise SystemExit("ERROR: patch source file not found: %s" % path)
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def run_patch_attempt_v0(args, state: RetrievalState, patch_iter_idx: int) -> Dict[str, Any]:
+    artifacts = getattr(state, "artifacts", {})
+    global_summary = _get_artifact_field(artifacts, "global_summary", {}) or {}
+    local_summaries = _get_artifact_field(artifacts, "local_summaries", []) or []
+
+    source_code = _read_patch_source_or_exit(
+        target_repo=args.patch_target_repo,
+        rel_source_file=args.patch_source_file,
+    )
+    problem_statement = _read_optional_text_file(getattr(args, "patch_problem_file", ""))
+
+    generator = LLMPatchGenerator(model=args.patch_model)
+
+    print("\n[PATCH] generate patch from global_summary.fix_context + source file ...")
+    gen = generator.generate_patch(
+        rel_source_file=args.patch_source_file,
+        source_code=source_code,
+        global_summary=global_summary,
+        local_summaries=local_summaries,
+        problem_statement=problem_statement,
+    )
+
+    if not gen.get("ok"):
+        result = {
+            "patch_iter": int(patch_iter_idx),
+            "status": gen.get("status", "GEN_FAILED"),
+            "ok": False,
+            "generation": gen,
+        }
+        print("[PATCH] generation failed:", gen.get("error"))
+        return result
+
+    patch_text = gen.get("patch", "")
+    print("[PATCH] generated unified diff chars=%d" % len(patch_text))
+
+    validator = PatchValidator(
+        target_repo=args.patch_target_repo,
+        workdir_root=args.patch_workdir,
+        test_cmd=args.patch_test_cmd,
+        timeout_s=int(args.patch_timeout_s),
+    )
+
+    print("[PATCH] apply patch and run validation command ...")
+    val = validator.validate(patch_text, patch_iter=int(patch_iter_idx))
+
+    result = {
+        "patch_iter": int(patch_iter_idx),
+        "status": val.get("status"),
+        "ok": bool(val.get("ok")),
+        "generation": {
+            "status": gen.get("status"),
+            "model": gen.get("model"),
+            "patch_chars": len(patch_text),
+        },
+        "validation": val,
+    }
+
+    print("[PATCH] result=%s ok=%s" % (result["status"], str(result["ok"])))
+    if val.get("patch_file"):
+        print("[PATCH] patch_file=%s" % val.get("patch_file"))
+    if val.get("workdir"):
+        print("[PATCH] workdir=%s" % val.get("workdir"))
+
+    return result
+
+
+# =================================================
+# (H) One retrieval episode (inside ONE patch iteration)
+# =================================================
+
+def run_one_retrieval_episode(args, normalized_schema_obj: Dict[str, Any], patch_iter_idx: int) -> RetrievalState:
+    # budgets per retrieval episode (per patch attempt)
+    budgets = RetrievalBudgets(
+        max_queries_total=int(args.max_queries_total),
+        max_replans=int(args.max_replans),
+        max_depth_increases_per_task=int(args.max_depth_increases),
+        enforce_per_graph_caps=bool(getattr(args, "enforce_per_graph_caps", False)),
+    )
+
+    # -1 means unlimited
+    # (RetrievalBudgets checks use is_unlimited() => v < 0 is treated as unlimited)
+    state = RetrievalState(attempt_id=patch_iter_idx, budgets=budgets)
+    ctrl = AttemptController(state)
+
+    sg = SchemaGuard(
+        normalized_schema_path=args.schema,
+        cypher_caps_path=args.caps,
+        strict_unknown_functions=bool(args.strict_unknown_functions),
+        allow_wildcard_edge=bool(getattr(args, "allow_wildcard_edge", False)),
+        allow_unlabeled_nodes=bool(getattr(args, "allow_unlabeled_nodes", False)),
+    )
+    qg = QueryGuard(
+        sg,
+        policy={
+            "max_limit": int(args.max_limit),
+            "default_var_length": int(args.default_depth),
+            "max_var_length_upper": int(args.max_depth),
+            "var_length_step": int(args.depth_step),
+            "allow_wildcard_edge": bool(args.allow_wildcard_edge),
+        },
+    )
+
+    local_summary_builder = LocalSummaryBuilder(args.semantics_catalog)
+    global_summary_builder = GlobalSummaryBuilder()
+    llm_summary_refiner = None
+    if getattr(args, "use_llm_summary", False):
+        llm_summary_refiner = LLMLocalSummaryRefiner(
+            model=args.llm_summary_model,
+            max_paths=args.llm_summary_max_paths,
+        )
+
+
+    planner = None
+    db_agent = None
+    bolt_router = None
+
+    if args.use_builder:
+        planner = RetrievalPlannerAgent(normalized_schema_obj)
+
+        if args.use_db:
+            if not args.bolt_pass:
+                raise SystemExit("ERROR: --use-db requires --bolt-pass (or env TUGRAPH_BOLT_PASS)")
+            bolt_router = BoltRouter(
+                uri=args.bolt_uri,
+                user=args.bolt_user,
+                password=args.bolt_pass,
+            )
+
+        db_agent = DBQueryAgent(
+            query_guard=qg,
+            normalized_schema=normalized_schema_obj,
+            bolt_client=None,
+        )
+
+    print("=== CodeGraphHunter AttemptController CLI (Patch Iteration) ===")
+    print("Patch Iter:", patch_iter_idx)
+    print("Schema   :", args.schema)
+    print("Caps     :", args.caps)
+    print("Mode     :", "BUILDER" if args.use_builder else "LEGACY")
+    print("Budgets  : max_queries_total=%s, max_replans=%s, max_depth_increases=%s" %
+          (str(args.max_queries_total), str(args.max_replans), str(args.max_depth_increases)))
+
+    if args.use_db:
+        print("DB       :", args.bolt_uri, "(db=%s)" % args.bolt_db)
+        bolt0 = bolt_router.get(args.bolt_db)
+        cy0 = "RETURN 1 AS ok LIMIT 1"
+        _print_db_debug(
+            enabled=bool(args.print_db_debug),
+            phase="SMOKE",
+            dbname=str(args.bolt_db),
+            cypher=cy0,
+            params=None,
+            records=None,
+        )
+        pong = bolt0.run(cy0, params=None, timeout_s=int(args.bolt_timeout_s))
+        recs0 = pong.get("records") or []
+        print("[DB PING] ok=", (recs0 or [{}])[0].get("ok", None))
+        print("[DB EXEC] rows=%d" % len(recs0))
+
+        if int(args.print_db_records) == 1:
+            _print_db_debug(
+                enabled=True,
+                phase="SMOKE_RESULT",
+                dbname=str(args.bolt_db),
+                cypher=cy0,
+                params=None,
+                records=recs0,
+                max_records=int(args.print_db_records_max),
+            )
+
+    print("--------------------------------------------------")
+
+    # init plan
+    if args.use_builder:
+        needs = schema_driven_needs(normalized_schema_obj, state, "init", args.dst_node_label,
+                                    relax_traversal=bool(args.regtest_relax_traversal))
+        needs = maybe_apply_seed_discovery_to_needs(
+            needs=needs,
+            bolt_router=bolt_router,
+            default_db=str(args.bolt_db),
+            timeout_s=int(args.bolt_timeout_s),
+            debug=bool(args.print_db_debug),
+            print_records=bool(int(args.print_db_records) == 1),
+            print_records_max=int(args.print_db_records_max),
+        )
+        plans = planner.plan(needs, state)
+        if not plans:
+            raise RuntimeError("RetrievalPlannerAgent produced no plans.")
+        plan = plans[0]
+        llm_requested_depth = int(getattr(plan, "requested_depth", None) or args.default_depth)
+    else:
+        plan = fake_retrieval_planner_dict(state, "init")
+        llm_requested_depth = int(plan.get("requested_depth", args.default_depth))
+
+    system_depth = int(args.default_depth)
+
+    # ----------------
+    # retrieval episode loop
+    # ----------------
+    while True:
+        if ctrl.should_force_patch():
+            break
+
+        if args.use_builder:
+            graph_type = str(plan.graph_type)
+            task_id = str(plan.task_id)
+        else:
+            graph_type = str(plan["graph_type"])
+            task_id = str(plan["task_id"])
+
+        # graph skip is not a query step
+        if not ctrl.can_query_graph_type(graph_type):
+            print("[GRAPH_TYPE_SKIPPED] graph=%s task=%s" % (graph_type, task_id))
+            state.add_trace("GRAPH_TYPE_SKIPPED", {"graph_type": graph_type, "task_id": task_id})
+            if args.use_builder:
+                needs = schema_driven_needs(normalized_schema_obj, state, "replan", args.dst_node_label,
+                                            relax_traversal=bool(args.regtest_relax_traversal))
+                plans = planner.plan(needs, state)
+                plan = plans[0]
+                llm_requested_depth = int(getattr(plan, "requested_depth", None) or args.default_depth)
+            else:
+                plan = fake_retrieval_planner_dict(state, "replan")
+                llm_requested_depth = int(plan.get("requested_depth", args.default_depth))
+            system_depth = int(args.default_depth)
+            continue
+
+        # record real query (consumes query budget)
+        ok_query = ctrl.record_query(graph_type, task_id, {"plan": plan_to_payload_any(plan)})
+        if not ok_query:
+            # if it failed because of query budget -> stop retrieval episode
+            if state.stop_reason == AttemptStopReasons.QUERY_BUDGET_EXHAUSTED:
+                break
+            # else: skip & continue (but should be rare here)
+            continue
+
+        # determine dst_label
+        if args.use_builder:
+            if bool(getattr(args, "regtest_relax_traversal", False)):
+                dst_label = None
+            else:
+                cfg = _graph_cfg_from_schema(normalized_schema_obj, graph_type)
+                dst_label = _pick_dst_label(cfg["schema_graph_key"], cfg["node_labels"], args.dst_node_label)
+        else:
+            dst_label = args.dst_node_label
+
+        # 1) LLM draft validation
+        if args.inject_guard_error:
+            draft_cypher = "MATCH (n:__NON_EXISTENT_LABEL__ {id: 1}) RETURN n LIMIT 1"
+            draft_params = None
+        else:
+            if args.use_builder:
+                built = build_query_or_exit(db_agent, plan, llm_requested_depth, dst_label)
+                draft_cypher, draft_params = _split_built_query(built)
+            else:
+                draft_cypher = render_query_from_plan_legacy(plan, llm_requested_depth, dst_label)
+                draft_params = None
+
+        draft_cypher, draft_params = normalize_limit_and_params(draft_cypher, draft_params, int(args.max_limit))
+        draft_guard = qg.validate_for_execution(draft_cypher, source="llm")
+
+        if draft_guard.get("status") != "ok":
+            print("\n[GUARD ERROR]", json.dumps(draft_guard, indent=2, sort_keys=True))
+            if not ctrl.record_replan({"reason": "GUARD_ERROR", "guard": draft_guard}):
+                break
+
+            if args.use_builder:
+                needs = schema_driven_needs(normalized_schema_obj, state, "replan", args.dst_node_label,
+                                            relax_traversal=bool(args.regtest_relax_traversal))
+                plans = planner.plan(needs, state)
+                plan = plans[0]
+                llm_requested_depth = int(getattr(plan, "requested_depth", None) or args.default_depth)
+            else:
+                plan = fake_retrieval_planner_dict(state, "replan")
+                llm_requested_depth = int(plan.get("requested_depth", args.default_depth))
+
+            system_depth = int(args.default_depth)
+            continue
+
+        # 2) System execution (fake OR DB)
+        if args.use_builder:
+            built_exec = build_query_or_exit(db_agent, plan, system_depth, dst_label)
+            exec_cypher, exec_params = _split_built_query(built_exec)
+        else:
+            exec_cypher = render_query_from_plan_legacy(plan, system_depth, dst_label)
+            exec_params = None
+
+        exec_cypher, exec_params = normalize_limit_and_params(exec_cypher, exec_params, int(args.max_limit))
+
+        if args.use_db:
+            want_db = tugraph_db_for_graph_type(graph_type, fallback=str(args.bolt_db))
+            bolt = bolt_router.get(want_db)
+
+            _print_db_debug(
+                enabled=bool(args.print_db_debug),
+                phase="EXEC",
+                dbname=str(want_db),
+                cypher=exec_cypher,
+                params=exec_params,
+                records=None,
+            )
+
+            exec_out = execute_real_db_or_exit(bolt, exec_cypher, exec_params, int(args.bolt_timeout_s))
+            if not exec_out.get("ok"):
+                err = exec_out.get("error", "unknown")
+                print("\n[DB EXEC ERROR]", err)
+                retry = maybe_drop_dst_label_on_label_error(exec_cypher, err)
+                if retry is not None:
+                    retry, exec_params2 = normalize_limit_and_params(retry, exec_params, int(args.max_limit))
+                    retry_out = execute_real_db_or_exit(bolt, retry, exec_params2, int(args.bolt_timeout_s))
+                    if retry_out.get("ok"):
+                        records = retry_out.get("records") or []
+                    else:
+                        records = []
+                else:
+                    records = []
+            else:
+                records = exec_out.get("records") or []
+
+            print("[DB EXEC] db=%s rows=%d" % (want_db, len(records)))
+            sub_meta = {
+                "num_nodes": int(len(records)),
+                "num_edges": 0,
+                "hit_cap": False,
+                "coverage": min(1.0, float(len(records)) / 50.0),
+                "depth": int(system_depth),
+            }
+        else:
+            fake = fake_executor(exec_cypher)
+            sub_meta = fake.get("subgraph_meta", {})
+
+        records_for_summary = records if args.use_db else []
+
+        summary = local_summary_builder.build(
+            graph_type=graph_type,
+            task_id=task_id,
+            step_index=state.counters.queries_total,
+            query_plan=plan_to_payload_any(plan),
+            subgraph_meta=sub_meta,
+            records=records_for_summary,
+            cypher=exec_cypher,
+            params=exec_params,
+        )
+        if llm_summary_refiner is not None:
+            summary["llm_narrative"] = llm_summary_refiner.refine(summary)
+
+        state.record_subgraph_meta({"task_id": task_id, "graph_type": graph_type, "stats": sub_meta})
+        state.record_local_summary_meta({"task_id": task_id, "graph_type": graph_type, "summary": summary})
+
+        print("\n[STEP %d] graph=%s task=%s" % (state.counters.queries_total, graph_type, task_id))
+        print("  executed_depth      :", system_depth)
+        print("  exec_subgraph       :", sub_meta)
+        print("  summary_signals     :", summary.get("signals") if isinstance(summary, dict) else None)
+        if isinstance(summary, dict) and summary.get("llm_narrative"):
+            print("  llm_narrative     :", summary["llm_narrative"].get("brief"))
+
+        summary_signals = summary.get("signals", {}) if isinstance(summary, dict) else {}
+        objective_met = bool(summary_signals.get("objective_met", summary.get("objective_met", False)))
+        
+        if objective_met:
+            state.stop_reason = AttemptStopReasons.OBJECTIVE_MET
+            break
+
+        # If the last executed query already exhausted the query budget,
+        # stop immediately before recording a deepen/replan action.
+        if query_budget_exhausted(state):
+            state.stop_reason = AttemptStopReasons.QUERY_BUDGET_EXHAUSTED
+            state.stop_detail = {
+                "queries_total": state.counters.queries_total,
+                "max_queries_total": state.budgets.max_queries_total,
+            }
+            state.add_trace("QUERY_BUDGET_EXHAUSTED", dict(state.stop_detail))
+            break
+        
+        # deepen
+        next_depth = int(system_depth) + int(args.depth_step)
+        can_deepen = (
+            int(args.depth_step) > 0
+            and next_depth > int(system_depth)
+            and next_depth <= int(args.max_depth)
+            and ctrl.can_increase_depth(task_id)
+        )
+        if can_deepen:
+            if ctrl.record_depth_increase(task_id, int(system_depth), int(next_depth), "INSUFFICIENT_CONTEXT"):
+                print("[DEEPEN] %s: %d -> %d (reason=INSUFFICIENT_CONTEXT)" % (task_id, int(system_depth), int(next_depth)))
+                system_depth = int(next_depth)
+                continue
+
+        # replan
+        if ctrl.can_replan():
+            if not ctrl.record_replan({"reason": "NEED_REPLAN"}):
+                break
+            if args.use_builder:
+                needs = schema_driven_needs(normalized_schema_obj, state, "replan", args.dst_node_label,
+                                            relax_traversal=bool(args.regtest_relax_traversal))
+                plans = planner.plan(needs, state)
+                plan = plans[0]
+                llm_requested_depth = int(getattr(plan, "requested_depth", None) or args.default_depth)
+            else:
+                plan = fake_retrieval_planner_dict(state, "replan")
+                llm_requested_depth = int(plan.get("requested_depth", args.default_depth))
+            system_depth = int(args.default_depth)
+            continue
+
+        # no deepen/replan => stop episode and force patch
+        break
+
+
+    global_summary = global_summary_builder.build(state)
+    try:
+        state.artifacts.global_summary = global_summary
+    except AttributeError:
+        state.artifacts["global_summary"] = global_summary
+
+    print(
+        "\n[GLOBAL SUMMARY] id=%s graphs=%s objective_met_any=%s"
+        % (
+            global_summary.get("global_summary_id"),
+            ",".join(global_summary.get("retrieval_accounting", {}).get("graphs_touched", [])),
+            str(global_summary.get("aggregated_signals", {}).get("objective_met_any")),
+        )
+    )
+
+    _print_stop_report(state)
+    print("\n=== FINAL STATE (summary) ===")
+    print(json.dumps(state.to_dict(), indent=2, sort_keys=True))
+
+    if bolt_router is not None:
+        try:
+            bolt_router.close()
+        except Exception:
+            pass
+
+    return state
+
+
+# =================================================
+# (I) Patch-level iteration outer loop
+# =================================================
+
+def main():
+    ap = argparse.ArgumentParser()
+
+    ap.add_argument("--schema", required=True, help="normalized_schema json path")
+    ap.add_argument("--caps", required=True, help="cypher capabilities json path")
+    ap.add_argument("--semantics-catalog", default=DEFAULT_SEMANTICS_CATALOG, help="Graph semantics catalog used by LocalSummaryBuilder.",)
+    ap.add_argument(
+    "--use-llm-summary",
+    action="store_true",
+    help="Enable constrained LLM narrative refinement for local summaries.",
+    )
+
+    ap.add_argument(
+        "--llm-summary-model",
+        default=os.environ.get("CODEGRAPHHUNTER_LLM_MODEL", "gpt-4o-mini"),
+        help="Model used for constrained LLM local summary refinement.",
+    )
+
+    ap.add_argument(
+        "--llm-summary-max-paths",
+        type=int,
+        default=5,
+        help="Maximum number of paths passed to the LLM summary refiner per local summary.",
+    )
+
+
+    # Patch-level iteration budget (pass@k)
+    # -1 => unlimited (but be careful; use your own safety cap if needed)
+    ap.add_argument(
+        "--max-iterations",
+        type=int,
+        default=3,
+        help="Max PATCH iterations (pass@k). -1 means unlimited.",
+    )
+
+    # Retrieval-episode budgets (per patch iteration)
+    ap.add_argument(
+        "--max-queries-total",
+        type=int,
+        default=30,
+        help="Max retrieval steps (executed queries) per PATCH iteration. -1 means unlimited.",
+    )
+    ap.add_argument("--max-replans", type=int, default=3, help="Max replans per patch iteration. -1 means unlimited.")
+    ap.add_argument("--max-depth-increases", type=int, default=2, help="Max depth increases per task. -1 means unlimited.")
+
+    ap.add_argument("--default-depth", type=int, default=4)
+    ap.add_argument("--max-depth", type=int, default=8)
+    ap.add_argument("--depth-step", type=int, default=2)
+
+    ap.add_argument("--max-limit", type=int, default=200)
+    ap.add_argument("--strict-unknown-functions", action="store_true")
+    ap.add_argument("--seed", type=int, default=0)
+
+    ap.add_argument("--dst-node-label", default=DST_NODE_LABEL_DEFAULT)
+    ap.add_argument("--inject-guard-error", action="store_true")
+    ap.add_argument("--use-builder", action="store_true")
+
+    ap.add_argument("--use-db", action="store_true", help="Execute queries against real TuGraph via Bolt (requires --use-builder).")
+    ap.add_argument("--bolt-uri", default=os.getenv("TUGRAPH_BOLT_URI", "bolt://localhost:7687"))
+    ap.add_argument("--bolt-user", default=os.getenv("TUGRAPH_BOLT_USER", "admin"))
+    ap.add_argument("--bolt-pass", default=os.getenv("TUGRAPH_BOLT_PASS", ""))
+    ap.add_argument("--bolt-db", default=os.getenv("TUGRAPH_BOLT_DB", "default"))
+    ap.add_argument("--bolt-timeout-s", type=int, default=int(os.getenv("TUGRAPH_BOLT_TIMEOUT_S", "30")))
+
+    ap.add_argument("--print-db-debug", action="store_true", help="Print db/cypher/params/preview records")
+    ap.add_argument("--print-db-records", type=int, default=0, help="1 to print records preview; default 0")
+    ap.add_argument("--print-db-records-max", type=int, default=3, help="Max records to print in preview")
+    ap.add_argument("--allow-wildcard-edge", action="store_true", help="DEBUG/REGTEST ONLY: allow relationship patterns without :EdgeLabel when they contain '*' (e.g., [*1..N]).")
+    ap.add_argument("--allow_unlabeled_nodes", action="store_true", help="DEBUG/REGTEST ONLY: allow nodes patterns without :NodeLabel when they contain '*'.")
+    ap.add_argument("--regtest-relax-traversal", action="store_true", help="REGTEST ONLY: relax builder traversal (PAG wildcard edges + dst_label=None)")
+
+    ap.add_argument(
+        "--patch-problem-file",
+        default=os.environ.get("CODEGRAPHHUNTER_PATCH_PROBLEM_FILE", ""),
+        help="Optional problem statement file passed to the LLM patch generator.",
+    )
+
+    ap.add_argument(
+        "--use-llm-patch",
+        action="store_true",
+        help="Enable LLM patch generation and validation.",
+    )
+
+    ap.add_argument(
+        "--patch-model",
+        default=os.environ.get("CODEGRAPHHUNTER_PATCH_MODEL", "gpt-4o-mini"),
+        help="Model used for LLM patch generation.",
+    )
+
+    ap.add_argument(
+        "--patch-target-repo",
+        default=os.environ.get("CODEGRAPHHUNTER_PATCH_TARGET_REPO", ""),
+        help="Buggy target repository path. Original repo is not modified.",
+    )
+
+    ap.add_argument(
+        "--patch-source-file",
+        default=os.environ.get("CODEGRAPHHUNTER_PATCH_SOURCE_FILE", ""),
+        help="Relative source file path inside target repo to patch.",
+    )
+
+    ap.add_argument(
+        "--patch-test-cmd",
+        default=os.environ.get("CODEGRAPHHUNTER_PATCH_TEST_CMD", ""),
+        help="Validation command executed inside copied patched repo.",
+    )
+
+    ap.add_argument(
+        "--patch-workdir",
+        default=os.environ.get("CODEGRAPHHUNTER_PATCH_WORKDIR", "/tmp/codegraphhunter_patch_demo"),
+        help="Temporary workdir root for copied patched repos.",
+    )
+
+    ap.add_argument(
+        "--patch-timeout-s",
+        type=int,
+        default=int(os.environ.get("CODEGRAPHHUNTER_PATCH_TIMEOUT_S", "120")),
+        help="Timeout for patch apply/test commands.",
+    )
+
+    args = ap.parse_args()
+
+    if not os.path.isfile(args.schema):
+        raise SystemExit("ERROR: normalized_schema file not found: %s" % args.schema)
+    if not os.path.isfile(args.caps):
+        raise SystemExit("ERROR: cypher_caps file not found: %s" % args.caps)
+    if not os.path.isfile(args.semantics_catalog):
+        raise SystemExit("ERROR: graph_semantics_catalog file not found: %s" % args.semantics_catalog)
+
+    if args.use_db and (not args.use_builder):
+        raise SystemExit("ERROR: --use-db requires --use-builder")
+    
+    if args.use_llm_patch:
+        if not args.patch_target_repo:
+            raise SystemExit("ERROR: --use-llm-patch requires --patch-target-repo")
+        if not args.patch_source_file:
+            raise SystemExit("ERROR: --use-llm-patch requires --patch-source-file")
+        if not args.patch_test_cmd:
+            raise SystemExit("ERROR: --use-llm-patch requires --patch-test-cmd")
+
+    random.seed(args.seed)
+    normalized_schema_obj = load_normalized_schema_or_exit(args.schema)
+
+    # patch-level outer loop
+    max_patch_iters = int(args.max_iterations)
+
+    # Safety fuse: even if -1 (unlimited), we still don't want accidental infinite loop in CLI demo.
+    HARD_FUSE = 2000
+    if max_patch_iters < 0:
+        print("[WARN] --max-iterations=-1 (unlimited). Applying HARD_FUSE=%d for safety in CLI demo." % HARD_FUSE)
+        patch_iter_range = range(1, HARD_FUSE + 1)
+    else:
+        patch_iter_range = range(1, max_patch_iters + 1)
+
+    last_state: Optional[RetrievalState] = None
+
+    for k in patch_iter_range:
+        state = run_one_retrieval_episode(args, normalized_schema_obj, patch_iter_idx=k)
+        last_state = state
+
+        # In your desired architecture:
+        # - If retrieval objective met => generate patch immediately.
+        # - We don't have fixing agent yet => simulate "patch always failed", continue until max patch iterations.
+        if args.use_llm_patch:
+            patch_result = run_patch_attempt_v0(args, state, patch_iter_idx=k)
+            print("\n=== PATCH ATTEMPT RESULT ===")
+            print(json.dumps(patch_result, indent=2, sort_keys=True))
+
+            if bool(patch_result.get("ok")):
+                print("\n[PATCH LOOP STOP] patch validated successfully at iteration: %d" % k)
+                break
+        else:
+            print("\n[PATCH] generate patch now (simulated) ...")
+            print("[PATCH] verify patch (simulated) ... FAILED")
+
+        # If user explicitly set finite max iterations and we reached it, stop.
+        if max_patch_iters >= 0 and k >= max_patch_iters:
+            print("\n[PATCH LOOP STOP] reached max patch iterations: %d" % max_patch_iters)
+            break
+
+    # Final summary of patch-level loop (lightweight)
+    if last_state is not None:
+        print("\n=== PATCH-LEVEL LOOP DONE ===")
+        print("last_patch_iter =", int(last_state.attempt_id))
+        print("last_retrieval_stop_reason =", last_state.stop_reason)
+
+
+if __name__ == "__main__":
+    main()

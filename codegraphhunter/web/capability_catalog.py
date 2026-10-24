@@ -1,0 +1,126 @@
+"""Named query contracts shared by the planner, dispatchers and the web UI."""
+
+_ROWS = [
+    ("SRC.FUNCTION_SEARCH", "Source", "Function / symbol search", "P0", "Find source functions related to path validation."),
+    ("SRC.SOURCE_WINDOW", "Source", "Source window", "P0", "Show the source of is_valid_path."),
+    ("SRC.CANDIDATE_LOCALIZATION", "Source", "Source candidates for a bug", "P0", "Which functions may accept paths containing embedded NUL bytes?"),
+    ("SRC.PATCH_LOCATION", "Source", "Map to the original patch location", "P0", "Where should I edit the original source for is_valid_path?"),
+    ("SRC.KEYWORD_USAGE", "Source", "Keyword / API usage", "P0", "Find uses of strcmp in the source."),
+    ("CG.FUNCTION_RESOLVE", "CallGraph", "Resolve function nodes", "P0", "Resolve decode_url to its CallGraph node."),
+    ("CG.CALLER_CALLEE_NEIGHBORHOOD", "CallGraph", "Callers and callees", "P0", "Show callers and callees of decode_url."),
+    ("CG.CALL_CHAIN", "CallGraph", "Paths between two functions", "P0", "Find call paths from decode_url to is_hex."),
+    ("CG.REACHABILITY", "CallGraph", "Function reachability", "P1", "Can decode_url reach is_hex?"),
+    ("CG.RECURSION_SELF", "CallGraph", "Direct recursion", "P1", "Find directly recursive functions."),
+    ("CG.CYCLE_DETECTION", "CallGraph", "Call cycle witnesses", "P1", "Find cycles in the CallGraph."),
+    ("CG.FANIN_FANOUT", "CallGraph", "Fan-in / fan-out ranking", "P1", "Which functions have the most callers?"),
+    ("CG.ENTRY_TO_TARGET_CONTEXT", "CallGraph", "Entry-to-target paths", "P1", "Find entry functions that can reach is_valid_path."),
+    ("ICFG.SEED_RESOLVE", "ICFG", "Resolve function entry seeds", "P0", "Find the ICFG entry of is_valid_path."),
+    ("ICFG.LOCAL_CONTROL_FLOW", "ICFG", "Entry-to-return paths", "P0", "Show entry-to-return paths inside is_valid_path."),
+    ("ICFG.BRANCH_CONTEXT", "ICFG", "Branch context", "P1", "Find branch context before ICFG node 83381."),
+    ("ICFG.EARLY_RETURN_GUARD", "ICFG", "Guard-like branches / early returns", "P1", "Find guard-like branches and early returns in is_valid_path."),
+    ("ICFG.CALLSITE_CONTEXT", "ICFG", "Callsite control-flow context", "P1", "Show the ICFG context around callsite 34189."),
+    ("ICFG.INTERPROC_PATH", "ICFG", "Interprocedural structural paths", "P1", "Find ICFG paths between source node 34189 and target node 34633."),
+    ("ICFG.LOOP_APPROX", "ICFG", "Control-flow cycle witnesses", "P1/P2", "Find control-flow cycles inside is_valid_path."),
+    ("ICFG.UNREACHABLE_APPROX", "ICFG", "Reachability-based unreachable candidates", "P2", "Find nodes not reachable from the entry of is_valid_path."),
+    ("PAG.FUNOBJ_RESOLVE", "PAG", "Resolve function objects", "P0", "Find the FunObjVar for decode_url."),
+    ("PAG.ARGUMENT_RESOLVE", "PAG", "Resolve formal arguments", "P0", "Find argument 1 of decode_url."),
+    ("PAG.POINTS_TO", "PAG", "Parameter points-to set", "P1", "What objects can argument 0 of has_crlf point to?"),
+    ("PAG.PARAMETER_ALIAS", "PAG", "Alias between two parameters", "P1", "May arguments 0 and 3 of from_hex_to_i alias?"),
+    ("PAG.ARGUMENT_FLOW", "PAG", "Mixed-edge argument flow", "P0", "Show value flow from argument zero of is_valid_path."),
+    ("PAG.LOAD_STORE_USES", "PAG", "Load / store uses", "P0/P1", "Show loads and stores involving PAG node 32075."),
+    ("PAG.DEF_USE_FLOW", "PAG", "Approximate def-use flow", "P1", "Where does the value of PAG node 32075 flow?"),
+    ("PAG.SOURCE_SINK_FLOW", "PAG", "Source-to-sink value flow", "P1", "Can argument 1 of decode_url flow to is_hex?"),
+    ("PAG.RETURN_FLOW", "PAG", "Return-value propagation", "P1", "Where does the return value of decode_url flow?"),
+    ("PAG.CALL_PARAM_FLOW", "PAG", "Actual-to-formal parameter edges", "P1", "Show actual-to-formal argument edges into from_hex_to_i."),
+    ("PAG.FIELD_ACCESS_FLOW", "PAG", "Field access flow", "P1/P2", "Show field access flow around PAG node 8663."),
+    ("PAG.ALIAS_APPROX", "PAG", "Shared-object alias evidence", "P2", "Do PAG nodes 32071 and 32075 have shared-object evidence?"),
+    ("CHG.CLASS_HIERARCHY", "CHG / Type", "Class hierarchy relations", "P1/P2", "Show class hierarchy edges around class Server."),
+    ("CHG.VIRTUAL_DISPATCH", "CHG / Type", "Virtual dispatch candidates", "P1/P2", "Show possible callees of virtual callsite 11539."),
+    ("CHG.OVERRIDE_RELATION", "CHG / Type", "Vtable-slot override candidates", "P1/P2", "Find possible overrides of a virtual method in class Stream."),
+    ("TYPE.NODE_TYPE_LOOKUP", "CHG / Type", "PAG node type", "P1", "What is the exported type of PAG node 32075?"),
+    ("TYPE.FIELD_INFO", "CHG / Type", "Struct and field metadata", "P2", "Show struct field metadata for exported type ID 4."),
+    ("XG.SOURCE_TO_GRAPH_IDS", "Cross-graph", "Source-to-graph ID mapping", "P0", "Map decode_url to CallGraph, PAG and ICFG IDs."),
+    ("XG.FUNCTION_EVIDENCE_BUNDLE", "Cross-graph", "Function evidence bundle", "P0", "Collect CallGraph, PAG and ICFG evidence for is_valid_path."),
+    ("XG.BUG_LOCALIZATION", "Cross-graph", "Source and graph localization candidates", "P0/P1", "Locate functions relevant to paths with embedded NUL bytes."),
+    ("XG.CHECK_BEFORE_USE", "Cross-graph", "Check-before-use evidence", "P1", "Show checks before uses of PAG node 32075."),
+    ("XG.SANITIZE_TO_SINK", "Cross-graph", "Sanitizer-to-sink evidence", "P1", "Trace argument 1 of decode_url to is_hex and look for validation by is_hex."),
+    ("XG.API_MISUSE_CONTEXT", "Cross-graph", "API call and preceding-check context", "P1", "Show call and guard context for from_hex_to_i."),
+    ("XG.REPAIR_LOCALIZATION_CONTEXT", "Cross-graph", "Patch-location evidence context", "P0/P1", "Find patch locations and graph evidence for embedded NUL path validation."),
+]
+
+APPROXIMATE = {
+    "PAG.POINTS_TO", "PAG.PARAMETER_ALIAS",
+    "SRC.CANDIDATE_LOCALIZATION", "SRC.PATCH_LOCATION", "ICFG.EARLY_RETURN_GUARD", "ICFG.INTERPROC_PATH",
+    "ICFG.LOOP_APPROX", "ICFG.UNREACHABLE_APPROX", "PAG.ARGUMENT_FLOW", "PAG.DEF_USE_FLOW", "PAG.SOURCE_SINK_FLOW",
+    "PAG.FIELD_ACCESS_FLOW", "PAG.ALIAS_APPROX", "CHG.VIRTUAL_DISPATCH", "CHG.OVERRIDE_RELATION",
+    "XG.BUG_LOCALIZATION", "XG.CHECK_BEFORE_USE", "XG.SANITIZE_TO_SINK", "XG.API_MISUSE_CONTEXT", "XG.REPAIR_LOCALIZATION_CONTEXT",
+}
+
+EXPECTED_OUTPUTS = {
+    "SRC.FUNCTION_SEARCH": "Matching source functions with original file paths, line ranges and lexical relevance scores.",
+    "SRC.SOURCE_WINDOW": "A numbered source snippet around the requested file and line, or matching function definitions.",
+    "SRC.CANDIDATE_LOCALIZATION": "Ranked source function candidates and their locations. Rankings suggest where to investigate; they do not establish a bug's cause.",
+    "SRC.PATCH_LOCATION": "Candidate locations in the original source, resolved from a function, a CallGraph node or a source location. Generated-source line numbers are not treated as original file coordinates.",
+    "SRC.KEYWORD_USAGE": "Source file paths, line numbers and matching lines containing the literal keyword, API or symbol.",
+    "CG.FUNCTION_RESOLVE": "Matching CallGraphNode IDs, stored function names, FunObjVar mappings and available source locations.",
+    "CG.CALLER_CALLEE_NEIGHBORHOOD": "Direct callers and callees, with a separate one-hop path for each exported call edge and its callsite metadata.",
+    "CG.CALL_CHAIN": "Distinct call paths between the specified source and target functions. Each path lists its hop count and expands to show every intermediate function and call edge.",
+    "CG.REACHABILITY": "Exported call paths when the target is reachable, or a scoped no-path/unknown conclusion. Static reachability does not establish runtime execution.",
+    "CG.RECURSION_SELF": "Functions with exported self-call edges, displayed as one-hop cycles. An empty result means no self-call was found in the searched scope.",
+    "CG.CYCLE_DETECTION": "Representative call-cycle witnesses with their hop counts and participating functions. This does not enumerate every cycle or establish runtime recursion.",
+    "CG.FANIN_FANOUT": "Functions ranked by distinct caller or callee counts. Incoming and outgoing callsite counts are reported separately from distinct-neighbor counts.",
+    "CG.ENTRY_TO_TARGET_CONTEXT": "Call paths from exported zero-in-degree functions to the target. This entry definition may differ from externally invoked callback semantics.",
+    "ICFG.SEED_RESOLVE": "Mapped function-entry ICFG node IDs and exported node properties, or details of an explicitly requested ICFG node.",
+    "ICFG.LOCAL_CONTROL_FLOW": "Static entry-to-return paths over IntraCFGEdge, with every intermediate node and hop. Traversal can stop at a call boundary; use an interprocedural request to enter callees.",
+    "ICFG.BRANCH_CONTEXT": "Branches that can reach the selected node or return, their connecting paths and exported branch-edge properties. Reachability alone does not prove dominance or predicate truth.",
+    "ICFG.EARLY_RETURN_GUARD": "Branch-to-return paths classified as guard-like candidates. Whether a branch performs a valid check requires source-level interpretation.",
+    "ICFG.CALLSITE_CONTEXT": "Preceding and following IntraCFGEdge paths around a specified callsite or a call to the selected callee.",
+    "ICFG.INTERPROC_PATH": "Paths using IntraCFGEdge, CallCFGEdge and RetCFGEdge between the specified endpoints. These structural paths do not prove balanced call/return contexts or feasibility.",
+    "ICFG.LOOP_APPROX": "Representative control-flow cycle witnesses in the selected function, including each node, edge and hop count. A structural cycle does not prove a particular input executes a loop.",
+    "ICFG.UNREACHABLE_APPROX": "Nodes not observed from the function entry through IntraCFGEdge. Call boundaries, depth bounds and missing exports can affect this approximation; it does not prove dead code.",
+    "PAG.FUNOBJ_RESOLVE": "Matching FunObjVar IDs, stored names and exported function-object properties.",
+    "PAG.ARGUMENT_RESOLVE": "Matching ArgValVar IDs with their argument numbers and FunObjVar mappings. Exported argument numbering may include hidden LLVM parameters.",
+    "PAG.POINTS_TO": "Inferred memory objects for the specified formal argument or PAG value, computed by iterating exported address, copy, load, store and parameter constraints. Analysis is flow-insensitive, context-insensitive and field-insensitive. Unknown objects and incomplete solving are reported explicitly. Result limits bound display, not constraint loading; argument indices are exported zero-based LLVM indices and can include hidden parameters.",
+    "PAG.PARAMETER_ALIAS": "A separate MayAlias, NoAlias or Unknown result for each matched parameter pair, with common inferred objects and points-to counts. NoAlias requires a converged, fully loaded exported model, nonempty disjoint sets and no unknown objects. It is scoped to that model, not a claim about all runtime behavior or MustAlias. Parameters may belong to the same or different functions; indices are exported zero-based LLVM indices.",
+    "PAG.ARGUMENT_FLOW": "Mixed-edge value-flow paths from the selected formal argument, including exported Store, Load, Copy, GEP and interprocedural edges. These are connectivity evidence rather than a complete data-flow solution.",
+    "PAG.LOAD_STORE_USES": "Direct LoadStmt and StoreStmt edges involving the selected PAG node, with available ICFG use-site IDs and edge properties.",
+    "PAG.DEF_USE_FLOW": "Exported value-flow paths from or to the selected node. Mixed PAG connectivity approximates def-use relationships and memory effects.",
+    "PAG.SOURCE_SINK_FLOW": "Paths from a source PAG node or argument to the target PAG node or sink's formal arguments, or a scoped no-path/unknown result. This is not a complete taint analysis.",
+    "PAG.RETURN_FLOW": "Value-flow paths starting at the function's exported RetValPN node, when present. Void functions and hidden return parameters may produce different evidence or no matching paths.",
+    "PAG.CALL_PARAM_FLOW": "Actual-to-formal CallPE paths with the formal argument number and callsite ID. A supplied caller or callsite restricts the matching calls.",
+    "PAG.FIELD_ACCESS_FLOW": "Paths through GEP, Load, Store and Copy edges, retaining exported field offsets and type IDs. Source-level field names are not invented when absent from the export.",
+    "PAG.ALIAS_APPROX": "Shared-object connectivity witnesses and paths from that object to both values. This is may-alias evidence; no shared witness yields unknown rather than proving no-alias.",
+    "CHG.CLASS_HIERARCHY": "Direct exported inheritance edges around the selected class, displayed as paths. Classes without matching inheritance edges appear as isolated records.",
+    "CHG.VIRTUAL_DISPATCH": "Possible callees from exported CallCFG edges and class vtable slots. These candidates do not prove the receiver's dynamic type or runtime target.",
+    "CHG.OVERRIDE_RELATION": "Possible override pairs inferred from differing vtable slots across an inheritance edge, with class names and function-object IDs. Multiple inheritance and ABI layout require verification.",
+    "TYPE.NODE_TYPE_LOOKUP": "SVF type IDs and exported type metadata associated with a PAG node, or metadata for an explicitly supplied type ID.",
+    "TYPE.FIELD_INFO": "Exported struct and StInfo metadata, field indices, offsets and type IDs when available. Source-level field names are absent from this export.",
+    "XG.SOURCE_TO_GRAPH_IDS": "Source function candidates and their mapped CallGraphNode, FunObjVar, ArgValVar and ICFG entry IDs, joined through exported mapping properties.",
+    "XG.FUNCTION_EVIDENCE_BUNDLE": "CallGraph, PAG and ICFG paths for the selected function, sharing the requested result budget. Cross-graph mappings do not create synthetic graph edges.",
+    "XG.BUG_LOCALIZATION": "Ranked source locations with exported graph mappings and heuristic relevance scores. These are investigation candidates, not proven root causes.",
+    "XG.CHECK_BEFORE_USE": "PAG load/store uses and ICFG branches that can reach those uses. Checked-variable identity, dominance and successful validation remain unknown.",
+    "XG.SANITIZE_TO_SINK": "PAG source-to-sink evidence, preceding ICFG branch context and CallGraph paths, with available sanitizer-call witnesses. Whether the value is safe at the sink remains unknown.",
+    "XG.API_MISUSE_CONTEXT": "API callsites, preceding branch paths, actual-to-formal argument edges and caller context. Missing checks or API-contract violations are not inferred from absent evidence alone.",
+    "XG.REPAIR_LOCALIZATION_CONTEXT": "Ranked candidate edit locations in the original source, source windows and graph mappings. The result suggests repair context rather than proving a correct fix.",
+}
+
+CAPABILITIES = {key: dict(id=key, group=group, title=title, priority=priority, example=example,
+                          examples=[example], expected_output=EXPECTED_OUTPUTS[key],
+                          analysis="approximate" if key in APPROXIMATE else "graph_or_source_evidence")
+                for key, group, title, priority, example in _ROWS}
+
+CAPABILITIES["PAG.POINTS_TO"]["examples"] += [
+    "Compute the points-to set of argument 1 of decode_url.",
+    "Compute the points-to set of PAG ArgValVar node 99131.",
+]
+CAPABILITIES["PAG.PARAMETER_ALIAS"]["examples"] += [
+    "May argument 0 of has_crlf and argument 1 of Request::set_header alias?",
+    "May argument 0 of has_crlf and argument 0 of is_valid_path alias?",
+    "Do PAG ArgValVar nodes 28351 and 99131 possibly alias?",
+]
+
+
+def catalog():
+    return {"ok": True, "count": len(CAPABILITIES), "capabilities": list(CAPABILITIES.values())}
+
+

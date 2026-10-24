@@ -1,0 +1,415 @@
+{
+  "version": "1.1",
+  "graphs": {
+    "CALLGRAPH": {
+      "description": "Function call relationships between procedures.",
+      "patterns": {
+        "call_path": "A sequence of function calls forming a call chain."
+      },
+      "node_types": {
+        "CallGraphNode": {
+          "meaning": "A function-level node representing one procedure/function in the program. Its fun_name property gives the human-readable function name, and fun_obj_var_id links it to the corresponding PAG FunObjVar.",
+          "important_properties": [
+            "id",
+            "fun_name",
+            "fun_obj_var_id",
+            "source_loc"
+          ]
+        }
+      },
+      "edge_types": {
+        "CallGraphEdge": {
+          "meaning": "Indicates that the caller function invokes the callee function.",
+          "direction": "caller -> callee"
+        }
+      },
+      "property_semantics": {
+        "node_properties": {
+          "id": "Primary graph-local identifier of a CallGraphNode. Use this id only within the CallGraph unless an explicit cross-graph mapping is available.",
+          "fun_obj_var_id": "Cross-graph link to the PAG FunObjVar representing the same function. Use this field to connect a call graph function node to function-level metadata stored in PAG, such as function attributes, argument node ids, reachable basic blocks, and source-level name metadata.",
+          "source_loc": "Source location or source-level description associated with the function node. Use it to ground a call-chain summary in file/line context when available.",
+          "fun_name": "Human-readable function name represented by this CallGraphNode. Prefer this property when summarizing caller/callee chains, e.g., caller -> callee."
+        },
+        "edge_properties": {
+          "csid": "Call-site id associated with the call graph edge. Use it to connect the caller-callee relation to a concrete call site when cross-graph mapping is available.",
+          "kind": "Internal call graph edge kind enum. Treat as encoded metadata unless a decoder is available.",
+          "direct_call_set": "Serialized set of direct call-site/callee information represented by this edge.",
+          "indirect_call_set": "Serialized set of indirect call-site/callee information represented by this edge, important for function-pointer or virtual dispatch calls."
+        },
+        "cross_graph_links": {
+          "fun_obj_var_id": "CallGraphNode -> PAG FunObjVar. This is the main bridge from a function-level call node to PAG function-object metadata.",
+          "csid": "CallGraph edge -> call site, potentially linkable to ICFG CallICFGNode/PAG call edges if a call-site-id mapping is available",
+          "direct_call_set": "CallGraph edge -> direct call metadata",
+          "indirect_call_set": "CallGraph edge -> indirect call metadata"
+        }
+      },
+      "summary_templates": {
+        "call_path": "Summarize each returned path as an ordered caller -> callee chain. Mention direct vs indirect calls only if edge properties support it.",
+        "endpoint_reachability": "If only endpoints are returned, describe that the callee is reachable from the caller within the queried depth; do not invent intermediate functions.",
+        "function_node": "When summarizing CallGraphNode records, use fun_name as the primary display name, source_loc as source grounding, and fun_obj_var_id as the bridge to PAG function metadata."
+      }
+    },
+    "PAG": {
+      "description": "Program Assignment Graph representing pointer and data flow relationships.",
+      "node_types": {
+        "ValVar": {
+          "meaning": "A value-level variable in SVF/PAG. It represents a program value that may participate in pointer or value-flow relationships. Do not always interpret it as a concrete memory object."
+        },
+        "ObjVar": {
+          "meaning": "An object-level variable representing an abstract memory object such as a stack object, heap object, global object, constant object, or field-sensitive object."
+        },
+        "GepObjVar": {
+          "meaning": "A subclass of ObjVar, represents a field of an aggregate object."
+        },
+        "GepValVar": {
+          "meaning": "A subclass of ValVar, represents an introduced dummy node to achieve field sensitivity when handling external library calls (e.g., memcpy, where pointers (LLVM Values) that point to the fields of an struct do not explicitly appear at an instruction)"
+        },
+        "RetValPN": {
+          "meaning": "Represents the unique return of a procedure."
+        },
+        "VarArgValPN": {
+          "meaning": "Denotes a variadic argument of a procedure."
+        },
+        "ArgValVar": {
+          "meaning": "A ValVar representing a function's formal parameter (i.e., an llvm::Argument) in SVF's SVFIR/PAG. Each ArgValVar corresponds to one parameter of a function and records its argument index (position)."
+        },
+        "BaseObjVar": {
+          "meaning": "Represents a base memory object variable in the SVF Program Assignment Graph (PAG). A BaseObjVar corresponds to a memory object with a concrete allocation site, such as global variables, stack allocations, or heap allocations. It serves as the base object for field-sensitive memory modeling."
+        },
+        "HeapObjVar": {
+          "meaning": "Represents a heap allocation object in the SVF Program Assignment Graph (PAG). A HeapObjVar corresponds to a memory object allocated dynamically at a heap allocation site, such as malloc, new, or other dynamic allocation functions."
+        },
+        "StackObjVar": {
+          "meaning": "Represents a stack allocation object, typically created from an LLVM alloca instruction."
+        },
+        "FunObjVar": {
+          "meaning": "Represents the memory object of a function, enabling functions to be treated as pointer targets."
+        },
+        "FunValVar": {
+          "meaning": "A value variable representing a function value used in expressions or assignments."
+        },
+        "GlobalValVar": {
+          "meaning": "Represents a value variable corresponding to a global variable in the program. It models the value-level representation of a global variable that can participate in value-flow operations.",
+          "direction": "GlobalValVar  → value representation of a global variable"
+        },
+        "GlobalObjVar": {
+          "meaning": "Represents the memory object of a global variable.This node corresponds to the global memory allocation object associated with a global variable.",
+          "direction": "GlobalObjVar  → memory object allocated for the global variable"
+        },
+        "ConstAggValVar": {
+          "meaning": "Represents a constant aggregate value, such as a constant struct, array, or vector, in the program."
+        },
+        "ConstDataValVar": {
+          "meaning": "Represents a generic constant data value used in the program. This serves as a base category for constant data values in SVF."
+        },
+        "ConstFPValVar": {
+          "meaning": "Represents a constant floating-point value(e.g., LLVM ConstantFP) in the program.",
+          "example": "const double x = 3.14;"
+        },
+        "ConstIntValVar": {
+          "meaning": "Represents a constant integer value (e.g., LLVM ConstantInt) in the program.",
+          "example": "const int x = 42;"
+        },
+        "ConstNullPtrValVar": {
+          "meaning": "Represents a constant null pointer value (e.g., LLVM ConstantPointerNull) in the program.",
+          "example": "const int* p = nullptr;"
+        },
+        "BlackHoleValVar": {
+          "meaning": "Represents a special sink value variable used to absorb unknown or unmodelled values during analysis. It is typically used when the analysis needs a placeholder node for imprecise or unknown value flows."
+        },
+        "ConstAggObjVar": {
+          "meaning": "Represents a memory object corresponding to a constant aggregate value, such as a constant struct, array, or vector. This node models the object-level representation of constant aggregate data in the program."
+        },
+        "ConstDataObjVar": {
+          "meaning": "Represents a memory object corresponding to constant data in the program. It serves as a general object-level representation for constant data values."
+        },
+        "ConstFPObjVar": {
+          "meaning": "Represents a memory object corresponding to a floating-point constant. This node models the object representation of a constant floating-point value."
+        },
+        "ConstIntObjVar": {
+          "meaning": "Represents a memory object corresponding to an integer constant. This node models the object representation of a constant integer value."
+        },
+        "ConstNullPtrObjVar": {
+          "meaning": "Represents the memory object corresponding to a null pointer constant (nullptr or LLVM ConstantPointerNull). It models the object-level representation associated with a null pointer."
+        },
+        "DummyValVar": {
+          "meaning": "Represents a dummy value variable used internally by the analysis when a concrete value variable is unavailable or unnecessary. It acts as a placeholder node in the value domain."
+        },
+        "DummyObjVar": {
+          "meaning": "Represents a dummy memory object used internally when a concrete memory object cannot be precisely identified. It serves as a placeholder object node in the memory domain."
+        },
+        "SVFVar": {
+          "meaning": "Base class for SVF value/object variables in PAG/SVFIR."
+        }
+      },
+      "edge_types": {
+        "AddrStmt": {
+          "meaning": "Represents address-of relationship. Corresponds to memory allocation",
+          "example": "p = &x"
+        },
+        "CopyStmt": {
+          "meaning": "Represents value copying. Assignment from one pointer to another.",
+          "example": "p = q"
+        },
+        "LoadStmt": {
+          "meaning": "Represents loading a value from a memory location.",
+          "example": "p = *q"
+        },
+        "StoreStmt": {
+          "meaning": "Represents storing a value into a memory location.",
+          "example": "*p = q"
+        },
+        "GepStmt": {
+          "meaning": "Represents field or element access.",
+          "example": "p = &x->field or p = &arr[i]"
+        },
+        "PhiStmt": {
+          "meaning": "Represents a phi node in SSA form, modeling the merging of values from different control flow paths.",
+          "example": "p = phi(q1, q2) where p can take the value of q1 or q2 depending on the control flow"
+        },
+        "BranchStmt": {
+          "meaning": "Represents a branch instruction that determines control flow based on a condition. It models conditional or unconditional branch operations that transfer control to different basic blocks.",
+          "example": "if (cond) goto label1 else goto label2"
+        },
+        "UnaryOPStmt": {
+          "meaning": "Represents a unary operation applied to a value variable.",
+          "example": "p = -q or p = !q"
+        },
+        "BinaryOPStmt": {
+          "meaning": "Represents a binary operation between two value variables.",
+          "example": "p = q1 + q2 or p = q1 * q2"
+        },
+        "CmpStmt": {
+          "meaning": "Represents a binary comparison operation between two value variables.",
+          "example": "cond = (q1 == q2) or cond = (q1 < q2)"
+        },
+        "SelectStmt": {
+          "meaning": "Represents a select instruction that chooses between two values based on a condition.",
+          "example": "p = select cond, q1, q2 where p takes the value of q1 if cond is true, otherwise q2"
+        }
+      },
+      "patterns": {
+        "dataflow_path": "A sequence of pointer or value propagation through assignments or memory operations."
+      },
+      "property_semantics": {
+        "node_properties": {
+          "id": "Graph-local PAG node identifier. Use it as an identity key inside the PAG database; do not assume it is globally unique across graphs unless cross-graph mapping is explicit.",
+          "kind": "Internal SVF node kind enum. Treat as an encoded category; use the node label and catalog meaning for natural-language explanation.",
+          "svf_type_id": "Identifier of the associated SVF type node. Use it to link the variable/object to TypeGraph/SVFType when type-level context is needed.",
+          "in_edge_kind_to_set_map": "Serialized mapping from incoming PAG edge kinds to edge-id sets. Useful for quickly seeing which kinds of statements flow into this node.",
+          "out_edge_kind_to_set_map": "Serialized mapping from outgoing PAG edge kinds to edge-id sets. Useful for quickly seeing which kinds of statements flow out of this node.",
+          "source_loc": "Source-level location or symbolic source description associated with the node when available.",
+          "icfg_node_id": "Cross-graph link to the ICFG node associated with this PAG value/object. Useful for locating the statement or control-flow context where the value/object appears.",
+          "cg_node_id": "Cross-graph link to a CallGraph node, mainly used for formal argument nodes associated with a function.",
+          "call_graph_node_id": "Cross-graph link to a CallGraph node, used by return/vararg parameter nodes associated with a function.",
+          "arg_no": "Formal argument index for an ArgValVar. Use this to describe which parameter position the node represents.",
+          "base_val_id": "For GepValVar, the base value node from which the field/element-sensitive value is derived.",
+          "gep_val_svf_type_id": "For GepValVar, the SVF type id of the derived GEP value.",
+          "ap_fld_idx": "Field index or access-path field index for field-sensitive modeling.",
+          "ap_gep_pointee_type_id": "SVF type id of the pointee type involved in a GEP/access-path operation.",
+          "ap_idx_operand_pairs": "Serialized index/operand pairs used to describe an access path or GEP expression.",
+          "llvm_var_inst_id": "Identifier of the underlying LLVM value/instruction associated with this GEP value if available.",
+          "obj_type_info_type_id": "SVF type id describing the object type of a memory object.",
+          "obj_type_info_flags": "Encoded flags describing object-type metadata. Treat as internal unless a decoder is available.",
+          "obj_type_info_max_offset_limit": "Maximum modeled offset limit for the object type, used for field/offset-sensitive object modeling.",
+          "obj_type_info_elem_num": "Number of elements recorded for the object type metadata.",
+          "obj_type_info_byte_size": "Byte size of the modeled memory object when available.",
+          "base_obj_var_node_id": "For GepObjVar, the base object node from which this field/offset object is derived.",
+          "app_offset": "Applied byte/field offset for a GepObjVar relative to its base object.",
+          "is_decl": "For FunObjVar, whether the function is only declared rather than defined.",
+          "intrinsic": "For FunObjVar, whether the function is an LLVM/compiler intrinsic.",
+          "is_addr_taken": "For FunObjVar, whether the function address is taken, which is important for indirect calls/function pointers.",
+          "is_uncalled": "For FunObjVar, whether the function is marked as not directly called/reachable in the current call graph context.",
+          "is_not_ret": "For FunObjVar, whether the function is modeled as not returning.",
+          "sup_var_arg": "For FunObjVar, whether the function supports variadic arguments.",
+          "fun_type_id": "SVF function type id for a FunObjVar.",
+          "real_def_fun_node_id": "For FunObjVar, identifier of the real definition function node if this object aliases/wraps a declaration or alias.",
+          "exit_bb_id": "Basic-block id of the function exit block.",
+          "all_args_node_ids": "Serialized ids of all formal argument nodes belonging to a function.",
+          "reachable_bbs": "Serialized basic-block ids reachable within the function.",
+          "dt_bbs_map": "Serialized dominator-tree basic-block mapping for the function.",
+          "pdt_bbs_map": "Serialized post-dominator-tree basic-block mapping for the function.",
+          "df_bbs_map": "Serialized dominance-frontier basic-block mapping for the function.",
+          "bb2_loop_map": "Serialized mapping from basic blocks to loop information.",
+          "bb2_p_dom_level": "Serialized mapping from basic blocks to post-dominator levels.",
+          "bb2_pi_dom": "Serialized mapping from basic blocks to immediate post-dominators.",
+          "func_annotation": "Function annotation string when available, e.g., analysis-provided metadata.",
+          "val_name": "Source/LLVM-level value name when available. This is one of the most useful fields for human-readable summaries.",
+          "fun_obj_var_node_id": "For FunValVar, link to the corresponding FunObjVar memory object node.",
+          "dval": "Floating-point constant value for constant FP value/object nodes.",
+          "zval": "Integer constant value represented as a string, typically preserving arbitrary precision.",
+          "sval": "Integer constant value represented as signed 64-bit when available."
+        },
+        "edge_properties": {
+          "edge_id": "Graph-local PAG edge identifier. Use it to refer to a specific SVF statement edge.",
+          "kind": "Internal SVF statement/edge kind enum. Prefer edge label such as CopyStmt/LoadStmt/StoreStmt for semantic explanation.",
+          "edge_flag": "Encoded SVF edge flag carrying low-level statement metadata. Treat as internal unless decoded.",
+          "svf_var_node_id": "Associated SVF variable node id for the statement edge, usually the statement result or representative variable.",
+          "bb_id": "Associated basic-block id where the statement belongs.",
+          "icfg_node_id": "Cross-graph link to the ICFG node corresponding to the program statement represented by this edge.",
+          "inst2_label_map": "Serialized mapping from instruction ids to labels/metadata.",
+          "var2_label_map": "Serialized mapping from variable ids to labels/metadata.",
+          "call_edge_label_counter": "Internal counter used for labeling or distinguishing call-related parameter edges.",
+          "store_edge_label_counter": "Internal counter used for labeling or distinguishing store-related edges.",
+          "multi_opnd_label_counter": "Internal counter used for labeling or distinguishing multi-operand edges.",
+          "arr_size": "For AddrStmt, modeled array size or allocation-size metadata when available.",
+          "copy_kind": "For CopyStmt, encoded copy subtype. Treat as internal unless a decoder is available.",
+          "variant_field": "For GepStmt, whether the field/index is variant or not statically fixed.",
+          "ap_fld_idx": "For GepStmt, field/access-path index used for field-sensitive access.",
+          "ap_gep_pointee_type_id": "For GepStmt, SVF type id of the GEP pointee type.",
+          "ap_idx_operand_pairs": "For GepStmt, serialized index/operand pairs describing the access path.",
+          "call_icfg_node_id": "For CallPE/RetPE/thread parameter edges, link to the call-site ICFG node.",
+          "fun_entry_icfg_node_id": "For CallPE/TDForkPE, link to the callee function entry ICFG node.",
+          "fun_exit_icfg_node_id": "For RetPE/TDJoin-like return edges, link to the callee function exit ICFG node.",
+          "op_var_node_ids": "Serialized operand variable node ids for multi-operand statements such as Phi, Select, Cmp, and BinaryOP.",
+          "op_icfg_nodes_ids": "For PhiStmt, serialized ICFG node ids corresponding to incoming operands/control-flow predecessors.",
+          "condition_svf_var_node_id": "Condition variable node id used by SelectStmt or BranchStmt.",
+          "predicate": "For CmpStmt, encoded comparison predicate. Treat as internal unless decoded to operators such as ==, <, etc.",
+          "op_code": "For UnaryOPStmt/BinaryOPStmt, encoded LLVM/SVF operation code. Treat as internal unless decoded.",
+          "br_inst_svf_var_node_id": "For BranchStmt, SVF variable node id corresponding to the branch instruction.",
+          "successors": "For BranchStmt, serialized successor basic-block or ICFG-node ids."
+        },
+        "cross_graph_links": {
+          "icfg_node_id": "PAG -> ICFG",
+          "bb_id": "PAG edge/node -> BasicBlock",
+          "cg_node_id": "PAG ArgValVar -> CallGraph",
+          "call_graph_node_id": "PAG RetValPN/VarArgValPN -> CallGraph",
+          "svf_type_id": "PAG -> TypeGraph/SVFType",
+          "obj_type_info_type_id": "PAG object -> TypeGraph/SVFType",
+          "fun_obj_var_node_id": "PAG FunValVar -> PAG FunObjVar",
+          "called_fun_obj_var_id": "ICFG CallICFGNode -> PAG FunObjVar",
+          "call_icfg_node_id": "PAG CallPE/RetPE -> ICFG CallICFGNode",
+          "fun_entry_icfg_node_id": "PAG CallPE -> ICFG FunEntryICFGNode",
+          "fun_exit_icfg_node_id": "PAG RetPE -> ICFG FunExitICFGNode"
+        }
+      },
+      "summary_templates": {
+        "dataflow_path": "Summarize value/object propagation through assignments, address-taking, loads, stores, calls, returns, and field-sensitive GEP accesses.",
+        "endpoint_reachability": "If only source and destination endpoints are returned, describe PAG reachability within the queried depth without inventing intermediate edge types.",
+        "memory_operation": "Use LoadStmt and StoreStmt carefully: LoadStmt reads from a memory location; StoreStmt writes a value into a memory location.",
+        "cross_graph_context": "Use icfg_node_id, call_icfg_node_id, fun_entry_icfg_node_id, and fun_exit_icfg_node_id to connect value-flow facts back to control-flow locations."
+      }
+    },
+    "ICFG": {
+      "description": "Interprocedural Control Flow Graph representing execution flow across functions.",
+      "node_types": {
+        "CallICFGNode": {
+          "meaning": "Represents a function call instruction."
+        },
+        "RetICFGNode": {
+          "meaning": "Represents the return point of a function call."
+        },
+        "FunEntryICFGNode": {
+          "meaning": "Entry node of a function."
+        },
+        "FunExitICFGNode": {
+          "meaning": "Exit node of a function."
+        },
+        "IntraICFGNode": {
+          "meaning": "Represents a control flow point within a function (e.g., a basic block or instruction)."
+        },
+        "GlobalICFGNode": {
+          "meaning": "Represents a global initialization point or global code outside of any function."
+        }
+      },
+      "edge_types": {
+        "CallCFGEdge": {
+          "meaning": "Control flow from caller to callee function."
+        },
+        "RetCFGEdge": {
+          "meaning": "Control flow from callee back to caller."
+        },
+        "IntraCFGEdge": {
+          "meaning": "Control flow within the same function."
+        }
+      },
+      "patterns": {
+        "control_path": "A sequence of control flow edges representing execution order."
+      },
+      "property_semantics": {
+        "node_properties": {
+          "id": "Graph-local ICFG node identifier.",
+          "kind": "Internal ICFG node kind enum. Use node label for semantic explanation unless a decoder is available.",
+          "pag_edge_ids": "Serialized PAG edge ids associated with this ICFG node. Use this to link a control-flow point to the PAG statements executed there.",
+          "source_loc": "Source-level location or symbolic source description associated with the control-flow node.",
+          "chnodes_ids": "Serialized CHG node ids associated with this ICFG node when class-hierarchy information is available.",
+          "cha_vtbls_ids": "Serialized class-hierarchy/vtable ids associated with this ICFG node when virtual dispatch information is available.",
+          "is_return": "For IntraICFGNode, indicates whether the intra-procedural control-flow point represents a return instruction.",
+          "bb_id": "Associated basic-block id.",
+          "fun_obj_var_id": "PAG FunObjVar id for the function containing this ICFG node.",
+          "fp_nodes": "For FunEntryICFGNode, serialized formal parameter node ids at function entry.",
+          "formal_ret_node_id": "For FunExitICFGNode, PAG node id representing the formal return value of the function.",
+          "ret_icfg_node_id": "For CallICFGNode, ICFG node id of the corresponding return site after the call.",
+          "svf_type_id": "Associated SVF type id for call/return value context.",
+          "ap_nodes": "For CallICFGNode, serialized actual parameter node ids at the call site.",
+          "called_fun_obj_var_id": "For CallICFGNode, PAG FunObjVar id of the statically resolved callee when available.",
+          "is_vararg": "For CallICFGNode, whether the call is variadic.",
+          "is_vir_call_inst": "For CallICFGNode, whether the call is a virtual call instruction.",
+          "vtab_ptr_node_id": "For virtual calls, PAG node id of the vtable pointer.",
+          "virtual_fun_idx": "For virtual calls, index of the virtual function in the vtable.",
+          "fun_name_of_v_call": "For virtual calls, function name string associated with the virtual call target when available.",
+          "ind_fun_ptr_var_id": "For indirect calls, PAG variable node id of the function pointer used as the callee.",
+          "actual_ret_node_id": "For RetICFGNode, PAG node id representing the actual return value at the call site.",
+          "call_block_node_id": "For RetICFGNode, ICFG node id of the corresponding call block/call site."
+        },
+        "edge_properties": {
+          "kind": "Internal ICFG edge kind enum. Prefer edge label such as IntraCFGEdge/CallCFGEdge/RetCFGEdge for semantic explanation.",
+          "condition_var_id": "For IntraCFGEdge, PAG variable node id of the branch condition controlling this edge, when the edge is conditional.",
+          "branch_cond_val": "For IntraCFGEdge, encoded branch outcome/value associated with the condition.",
+          "call_pe_ids": "For CallCFGEdge, serialized PAG CallPE edge ids that map actual parameters to callee formal parameters.",
+          "ret_pe_id": "For RetCFGEdge, PAG RetPE edge id that maps callee return/formal return to caller actual return."
+        },
+        "cross_graph_links": {
+          "pag_edge_ids": "ICFG -> PAG statement edges",
+          "fun_obj_var_id": "ICFG node -> PAG FunObjVar",
+          "called_fun_obj_var_id": "ICFG CallICFGNode -> PAG FunObjVar",
+          "formal_ret_node_id": "ICFG FunExitICFGNode -> PAG return node",
+          "actual_ret_node_id": "ICFG RetICFGNode -> PAG actual return node",
+          "ret_icfg_node_id": "ICFG CallICFGNode -> ICFG RetICFGNode",
+          "call_block_node_id": "ICFG RetICFGNode -> ICFG CallICFGNode/call block",
+          "bb_id": "ICFG -> BasicBlock",
+          "svf_type_id": "ICFG -> TypeGraph/SVFType",
+          "chnodes_ids": "ICFG -> CHG",
+          "cha_vtbls_ids": "ICFG -> CHG/vtable metadata",
+          "call_pe_ids": "ICFG CallCFGEdge -> PAG CallPE edges",
+          "ret_pe_id": "ICFG RetCFGEdge -> PAG RetPE edge"
+        }
+      },
+      "summary_templates": {
+        "control_path": "Summarize execution order across intra-procedural and inter-procedural control-flow edges.",
+        "call_return_context": "CallCFGEdge enters a callee; RetCFGEdge returns from callee back to caller; IntraCFGEdge stays within the same function.",
+        "branch_context": "For conditional IntraCFGEdge, use condition_var_id and branch_cond_val as encoded branch metadata; do not decode the condition unless the variable/source context is available."
+      }
+    },
+    "CHG": {
+      "status": "placeholder",
+      "description": "CHG graph semantics are not covered by the current MVP catalog.",
+      "property_semantics": {
+        "node_properties": {},
+        "edge_properties": {},
+        "cross_graph_links": {}
+      }
+    },
+    "BASICBLOCK": {
+      "status": "placeholder",
+      "description": "BASICBLOCK graph semantics are not covered by the current MVP catalog.",
+      "property_semantics": {
+        "node_properties": {},
+        "edge_properties": {},
+        "cross_graph_links": {}
+      }
+    }
+  },
+  "summary_policy": {
+    "describe_evidence_only": "Local and global summaries must only describe program facts directly supported by returned records, paths, node properties, edge properties, or explicitly provided bug context.",
+    "do_not_infer_missing_edges": "If returned records do not include concrete edge labels or a returned path object, do not invent intermediate edge types.",
+    "unknown_label_handling": "If node or edge labels are missing, describe them as unlabeled graph entities and rely on available properties such as id, source_loc, fun_obj_var_id, icfg_node_id, cg_node_id, bb_id, and svf_type_id.",
+    "path_requirement": "To summarize an actual ordered path, query results should include a path variable such as p. If only endpoints n and m are returned, summarize endpoint reachability rather than reconstructing a full path.",
+    "internal_enum_policy": "Properties named kind, edge_flag, predicate, op_code, and *_counter are internal encoded values unless a decoder is available. Mention them as identifiers/counters, not as human-readable semantics."
+  },
+  "result_interpretation": {
+    "endpoint_only": "If records contain only n and m, summarize reachability from n to m within the queried depth.",
+    "path_returned": "If records contain p, summarize the ordered node/edge sequence in p.",
+    "subgraph_returned": "If records contain a set of nodes and edges without a path order, summarize the subgraph composition, key entities, and directly observed relationships."
+  }
+}

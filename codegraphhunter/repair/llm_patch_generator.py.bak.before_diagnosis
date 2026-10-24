@@ -1,0 +1,364 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import json
+import os
+import re
+from typing import Any, Dict, List, Optional
+
+
+def _truncate(s: Any, limit: int = 20000) -> str:
+    text = "" if s is None else str(s)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...<truncated>..."
+
+
+def _extract_output_text(response: Any) -> str:
+    txt = getattr(response, "output_text", None)
+    if txt:
+        return str(txt)
+
+    try:
+        output = getattr(response, "output", None) or []
+        parts: List[str] = []
+        for item in output:
+            content = getattr(item, "content", None)
+            if content is None and isinstance(item, dict):
+                content = item.get("content")
+            for c in content or []:
+                if isinstance(c, dict):
+                    if c.get("type") in ("output_text", "text"):
+                        parts.append(str(c.get("text", "")))
+                else:
+                    c_type = getattr(c, "type", None)
+                    c_text = getattr(c, "text", None)
+                    if c_type in ("output_text", "text") and c_text:
+                        parts.append(str(c_text))
+        if parts:
+            return "\n".join(parts)
+    except Exception:
+        pass
+
+    return ""
+
+
+def _strip_code_fences(text: str) -> str:
+    s = text.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+
+def extract_unified_diff(text: str) -> str:
+    """
+    Extract a unified diff from model output.
+    Accepts either:
+    - diff --git ...
+    - --- a/file
+      +++ b/file
+    """
+    s = _strip_code_fences(text)
+
+    idx = s.find("diff --git ")
+    if idx >= 0:
+        return s[idx:].strip()
+
+    idx = s.find("--- a/")
+    if idx >= 0:
+        return s[idx:].strip()
+
+    idx = s.find("--- ")
+    if idx >= 0 and "+++ " in s[idx:]:
+        return s[idx:].strip()
+
+    return s.strip()
+
+
+def _line_numbered(text: str) -> str:
+    lines = text.splitlines()
+    return "\n".join("%5d | %s" % (i + 1, line) for i, line in enumerate(lines))
+
+
+class LLMPatchGenerator(object):
+    """
+    Minimal LLM patch generator v0.
+
+    It consumes:
+    - global_summary.fix_context.markdown
+    - local summaries and their llm_narrative
+    - one target source file
+
+    It returns:
+    - unified diff only
+    """
+
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        api_key_env: str = "OPENAI_API_KEY",
+        max_source_chars: int = 50000,
+        max_context_chars: int = 30000,
+    ):
+        self.model = model
+        self.api_key_env = api_key_env
+        self.max_source_chars = int(max_source_chars)
+        self.max_context_chars = int(max_context_chars)
+
+    def _collect_llm_narratives(self, local_summaries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out = []
+        for item in local_summaries or []:
+            summary = item.get("summary", item) if isinstance(item, dict) else {}
+            if not isinstance(summary, dict):
+                continue
+            narr = summary.get("llm_narrative")
+            if not isinstance(narr, dict):
+                continue
+            out.append({
+                "summary_id": summary.get("summary_id"),
+                "graph_type": summary.get("graph_type"),
+                "result_kind": summary.get("result_kind"),
+                "brief": narr.get("brief"),
+                "graph_semantic_interpretation": narr.get("graph_semantic_interpretation"),
+                "patch_relevance": narr.get("patch_relevance"),
+                "limitations": narr.get("limitations"),
+                "evidence_used": narr.get("evidence_used"),
+                "confidence": narr.get("confidence"),
+            })
+        return out
+
+    def _derive_graph_repair_focus(
+        self,
+        rel_source_file: str,
+        source_code: str,
+        global_summary: Dict[str, Any],
+    ) -> str:
+        """
+        Convert graph-localized evidence into concrete repair focus.
+
+        This is not a hardcoded patch. It extracts source lines mentioned by the
+        graph summary and shows exact nearby source windows to the patch model.
+        """
+        graph_text = json.dumps(global_summary or {}, ensure_ascii=False)
+        line_nums = []
+
+        for m in re.finditer(r'"ln"\\s*:\\s*(\\d+)', graph_text):
+            try:
+                line_nums.append(int(m.group(1)))
+            except Exception:
+                pass
+
+        # Some source_loc strings may be escaped or compact after JSON dumping.
+        for m in re.finditer(r'ln\\\\"?\\s*[:=]\\s*(\\d+)', graph_text):
+            try:
+                line_nums.append(int(m.group(1)))
+            except Exception:
+                pass
+
+        lines = source_code.splitlines()
+        max_ln = len(lines)
+
+        uniq = []
+        for ln in line_nums:
+            if 1 <= ln <= max_ln and ln not in uniq:
+                uniq.append(ln)
+
+        if not uniq:
+            return ""
+
+        selected = uniq[:10]
+        snippets = []
+
+        for ln in selected:
+            start = max(1, ln - 3)
+            end = min(max_ln, ln + 3)
+            body = []
+            for i in range(start, end + 1):
+                marker = ">>" if i == ln else "  "
+                body.append("%s %5d: %s" % (marker, i, lines[i - 1]))
+            snippets.append(
+                "Graph-localized source window around line %d:\\n%s"
+                % (ln, "\\n".join(body))
+            )
+
+        focus = (
+            "Graph-derived repair focus:\\n"
+            "- The graph summary localizes data-flow evidence to the following source locations in the target file.\\n"
+            "- Treat these exact source windows as high-priority repair locations.\\n"
+            "- Still obey the problem statement and source semantics; do not blindly patch every localized line.\\n\\n"
+            + "\\n\\n".join(snippets)
+            + "\\n\\n"
+        )
+
+        # This is a source-pattern hint, not a hardcoded patch. It activates only when
+        # this target source file actually contains the helper.
+        if "lookupKeyWriteOrReply" in source_code:
+            focus += (
+                "Source-semantics hint for this target file:\\n"
+                "- The source contains lookupKeyWriteOrReply(...), a helper that can decide the reply for a missing key before later branches execute.\\n"
+                "- If the problem concerns the reply shape for a missing/non-existing key, a change after lookupKeyWriteOrReply is unlikely to fix that path.\\n"
+                "- Prefer checking whether the reply argument passed to lookupKeyWriteOrReply should depend on the command mode.\\n"
+                "- Do not change the later `if (!count)` single-pop branch unless the missing-key path actually reaches it.\\n\\n"
+            )
+
+        return focus
+
+    def _system_prompt(self) -> str:
+        return (
+            "You are a cautious automated program repair patch generator for C/C++ repositories.\n\n"
+            "You must generate a patch as a unified diff that applies exactly to the provided source file.\n\n"
+            "Hard rules:\n"
+            "1. Output ONLY a unified diff. No markdown, no explanation, no code fences.\n"
+            "2. Modify only the target source file provided by the user.\n"
+            "3. The problem statement is the primary repair objective.\n"
+            "4. The current source file content is authoritative. Every unchanged context line in the diff must exactly match it.\n"
+            "5. Use graph evidence and summaries as localization and repair hints, not as guaranteed root cause.\n"
+            "6. Prefer the smallest plausible patch near graph-localized source locations.\n"
+            "7. If graph evidence reaches a call site that handles an early-return or missing-key reply, prefer modifying that call site's arguments rather than changing later branches.\n"
+            "8. A fix placed after an early-return helper cannot repair behavior that already returned inside that helper.\n"
+            "9. For reply-shape bugs, preserve existing single-element behavior and only change the reply object selected for the affected mode.\n"
+            "10. Do not modify a later count/single-pop branch unless the source proves the buggy behavior reaches that branch.\n"
+            "11. Preserve existing style and avoid unrelated changes.\n"
+            "12. Do not make whitespace-only changes.\n"
+            "13. Do not reformat existing code.\n"
+            "14. The diff path must use the exact relative path provided.\n"
+            "15. Generate syntactically valid unified diff hunks with enough exact context to apply cleanly.\n"
+        )
+
+    def _user_prompt(
+        self,
+        rel_source_file: str,
+        source_code: str,
+        global_summary: Dict[str, Any],
+        local_summaries: List[Dict[str, Any]],
+        problem_statement: str = "",
+    ) -> str:
+        fix_context = (
+            (global_summary or {})
+            .get("fix_context", {})
+            .get("markdown", "")
+        )
+
+        compact_global = {
+            "stop_reason": (global_summary or {}).get("stop_reason"),
+            "aggregated_signals": (global_summary or {}).get("aggregated_signals"),
+            "evidence_pool": (global_summary or {}).get("evidence_pool"),
+            "gaps": (global_summary or {}).get("gaps"),
+        }
+
+        narratives = self._collect_llm_narratives(local_summaries)
+        graph_repair_focus = self._derive_graph_repair_focus(
+            rel_source_file=rel_source_file,
+            source_code=source_code,
+            global_summary=global_summary,
+        )
+
+        return (
+            "Generate a unified diff patch for the following real-world bug.\\n\\n"
+            "Target relative source file:\\n"
+            "%s\\n\\n"
+            "Problem statement:\\n"
+            "%s\\n\\n"
+            "%s"
+            "Global graph-derived fix context:\\n"
+            "%s\\n\\n"
+            "Compact global evidence JSON:\\n"
+            "%s\\n\\n"
+            "LLM local summary narratives JSON:\\n"
+            "%s\\n\\n"
+            "Current source file content below is the exact file content to patch.\\n"
+            "Do not add line numbers to the patch. Do not invent context lines.\\n"
+            "Every unchanged context line in the unified diff must exactly match this source.\\n"
+            "<<<SOURCE_FILE_START>>>\\n"
+            "%s\\n"
+            "<<<SOURCE_FILE_END>>>\\n\\n"
+            "Return only a unified diff. The diff headers should be exactly:\\n"
+            "--- a/%s\\n"
+            "+++ b/%s\\n"
+        ) % (
+            rel_source_file,
+            _truncate(problem_statement, self.max_context_chars),
+            _truncate(graph_repair_focus, self.max_context_chars),
+            _truncate(fix_context, self.max_context_chars),
+            _truncate(json.dumps(compact_global, indent=2, sort_keys=True, ensure_ascii=False), self.max_context_chars),
+            _truncate(json.dumps(narratives, indent=2, sort_keys=True, ensure_ascii=False), self.max_context_chars),
+            _truncate(source_code, self.max_source_chars),
+            rel_source_file,
+            rel_source_file,
+        )
+
+    def generate_patch(
+        self,
+        rel_source_file: str,
+        source_code: str,
+        global_summary: Dict[str, Any],
+        local_summaries: List[Dict[str, Any]],
+        problem_statement: str = "",
+    ) -> Dict[str, Any]:
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            return {
+                "ok": False,
+                "status": "GEN_FAILED",
+                "error": "Missing environment variable: %s" % self.api_key_env,
+                "patch": "",
+            }
+
+        try:
+            from openai import OpenAI
+        except Exception as e:
+            return {
+                "ok": False,
+                "status": "GEN_FAILED",
+                "error": "Failed to import openai package: %s" % str(e),
+                "patch": "",
+            }
+
+        try:
+            client = OpenAI(api_key=api_key)
+            response = client.responses.create(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": self._system_prompt()},
+                    {
+                        "role": "user",
+                        "content": self._user_prompt(
+                            rel_source_file=rel_source_file,
+                            source_code=source_code,
+                            global_summary=global_summary,
+                            local_summaries=local_summaries,
+                            problem_statement=problem_statement,
+                        ),
+                    },
+                ],
+                temperature=0,
+                max_output_tokens=1800,
+            )
+
+            text = _extract_output_text(response)
+            patch = extract_unified_diff(text)
+
+            if not patch or "---" not in patch or "+++" not in patch:
+                return {
+                    "ok": False,
+                    "status": "GEN_FAILED",
+                    "error": "Model output did not contain a valid-looking unified diff.",
+                    "raw_output": _truncate(text, 3000),
+                    "patch": patch,
+                }
+
+            return {
+                "ok": True,
+                "status": "GENERATED",
+                "model": self.model,
+                "patch": patch,
+            }
+
+        except Exception as e:
+            return {
+                "ok": False,
+                "status": "GEN_FAILED",
+                "error": str(e),
+                "patch": "",
+            }

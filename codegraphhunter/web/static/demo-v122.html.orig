@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>CodeGraphHunter Demo · v1.2.2</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/demo-v122.css" />
+  </head>
+  <body class="demo-v122-page">
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell demo-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="CodeGraphHunter home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span>CodeGraph<span>Hunter</span></span>
+        </a>
+        <div class="topbar-right">
+          <nav class="mode-nav" aria-label="Analysis modes">
+            <a href="/">Build DB</a>
+            <a class="active" href="/demo">Frozen demo</a>
+          </nav>
+          <span class="frozen-indicator"><i></i>Frozen runner</span>
+        </div>
+      </header>
+
+      <nav class="graph-menu" aria-label="Graph query pages">
+        <span class="graph-menu-label">GRAPH WORKSPACE</span>
+        <a class="active" href="/demo">Demo overview</a>
+        <a href="/query/icfg"><i>01</i> Query on ICFG</a>
+        <a href="/query/pag"><i>02</i> Query on PAG</a>
+        <a href="/query/callgraph"><i>03</i> Query on CallGraph</a>
+        <span class="prototype-tag">V1.2.2 STABLE</span>
+      </nav>
+
+      <section class="v122-hero">
+        <div class="v122-hero-copy">
+          <div class="eyebrow"><span>DEMO</span> GRAPH-GUIDED REPOSITORY REPAIR</div>
+          <h1>CodeGraphHunter Demo</h1>
+          <p class="v122-subtitle">Graph-guided repository-level C/C++ bug localization and patch generation</p>
+          <div class="v122-badges">
+            <span class="version-badge">Demo version: <b id="demoVersion">v1.2.2</b></span>
+            <span id="finalStatus" class="final-status waiting">NOT RUN</span>
+          </div>
+        </div>
+        <div class="v122-run-panel">
+          <span>STABLE BLACK-BOX EXECUTION</span>
+          <code>/home/zexin/expirement/ICSE2027/CodeGraphHunter_demo_v1_2_2/bin/codegraphhunter-demo-v1.2.2</code>
+          <button id="runDemo" class="primary-button" type="button">
+            <span>Run CodeGraphHunter Demo</span><i aria-hidden="true">→</i>
+          </button>
+          <small id="runMeta">Ready to run the frozen v1.2.2 pipeline.</small>
+        </div>
+      </section>
+
+      <div id="demoError" class="v122-error hidden" role="alert">
+        <b id="demoErrorTitle">Demo run failed</b>
+        <p id="demoErrorMessage"></p>
+        <details id="errorLogDetails" class="hidden">
+          <summary>Last 80 pipeline log lines</summary>
+          <pre id="errorLogTail"></pre>
+        </details>
+      </div>
+
+      <section class="pipeline-flow" aria-label="CodeGraphHunter pipeline">
+        <span>Bug Report</span><i>→</i>
+        <span>Graph-Guided Localization</span><i>→</i>
+        <span>Multi-Graph Retrieval</span><i>→</i>
+        <span>Global Summary</span><i>→</i>
+        <span>Fault Diagnosis</span><i>→</i>
+        <span>Patch Generation</span><i>→</i>
+        <span id="pipelineValidation">Validation</span>
+      </section>
+
+      <section class="v122-card bug-report-card">
+        <div class="card-heading">
+          <div><span class="section-number">INPUT / 01</span><h2>Bug Report</h2></div>
+          <span class="input-badge">BUG REPORT ONLY</span>
+        </div>
+        <div class="bug-report-grid">
+          <div><span>Case</span><b id="caseName">yhirose__cpp-httplib-1765</b></div>
+          <div><span>Bug</span><b id="bugReport">Treat paths with embedded NUL bytes as invalid in detail::is_valid_path</b></div>
+          <div class="bug-input-note"><span>Input</span><b>Bug report only; no manual target function is supplied to the runner.</b></div>
+        </div>
+        <p class="honesty-note">This demo uses a frozen v1.2.2 runner with deterministic graph-guided retrieval and structured patch generation.</p>
+      </section>
+
+      <section class="v122-card timeline-card">
+        <div class="card-heading">
+          <div><span class="section-number">PIPELINE / 02</span><h2>Execution Timeline</h2></div>
+          <span id="runId" class="run-id">NO RUN ID</span>
+        </div>
+        <ol id="pipelineTimeline" class="v122-timeline">
+          <li data-step="bug-report"><span>01</span><div><b>Bug report received</b><small>Repository-level failure description</small></div><i>WAITING</i></li>
+          <li data-step="localization"><span>02</span><div><b>Source-level localization</b><small>Candidate source function and patch location</small></div><i>WAITING</i></li>
+          <li data-step="mapping"><span>03</span><div><b>Graph ID mapping</b><small>CallGraph, PAG, and ICFG seeds</small></div><i>WAITING</i></li>
+          <li data-step="retrieval"><span>04</span><div><b>Multi-graph retrieval</b><small>PAG · ICFG · CallGraph</small></div><i>WAITING</i></li>
+          <li data-step="summary"><span>05</span><div><b>Global summary</b><small>Cross-graph evidence synthesis</small></div><i>WAITING</i></li>
+          <li data-step="diagnosis"><span>06</span><div><b>Fault diagnosis</b><small>Evidence-grounded root cause</small></div><i>WAITING</i></li>
+          <li data-step="patch"><span>07</span><div><b>Patch generation</b><small>Structured repair sketch</small></div><i>WAITING</i></li>
+          <li data-step="validation"><span>08</span><div><b>Validation</b><small id="timelineValidationDetail">Awaiting patched test result</small></div><i>WAITING</i></li>
+        </ol>
+      </section>
+
+      <section id="resultContent" class="result-content muted-before-run" aria-live="polite">
+        <div class="v122-highlights">
+          <div><span>Localized function</span><b id="highlightFunction">—</b></div>
+          <div><span>Graphs touched</span><b id="highlightGraphs">—</b></div>
+          <div><span>Retrieval stop reason</span><b id="highlightStop">—</b></div>
+          <div><span>Patch validation</span><b id="highlightValidation">—</b></div>
+        </div>
+
+        <section class="v122-card localization-card">
+          <div class="card-heading">
+            <div><span class="section-number">LOCALIZATION / 03</span><h2>Graph-Guided Localization</h2></div>
+            <span class="evidence-badge">SOURCE ↔ GRAPH</span>
+          </div>
+          <div class="localization-grid">
+            <dl class="localization-details">
+              <div><dt>Localized function</dt><dd id="localizedFunction">—</dd></div>
+              <div><dt>Patch source</dt><dd id="patchSource">—</dd></div>
+              <div><dt>Graph function</dt><dd><code id="graphFunction">—</code></dd></div>
+            </dl>
+            <table class="id-table">
+              <thead><tr><th>ID type</th><th>Value</th></tr></thead>
+              <tbody>
+                <tr><td>CallGraph node</td><td id="callgraphNodeId">—</td></tr>
+                <tr><td>PAG FunObjVar</td><td id="funObjVarId">—</td></tr>
+                <tr><td>PAG argument seed</td><td id="argNodeId">—</td></tr>
+                <tr><td>ICFG seed</td><td id="icfgNodeId">—</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="v122-card retrieval-card">
+          <div class="card-heading">
+            <div><span class="section-number">RETRIEVAL / 04</span><h2>Multi-Graph Retrieval</h2></div>
+            <span id="retrievalStatus" class="retrieval-status">—</span>
+          </div>
+          <div class="graph-evidence-grid">
+            <article class="graph-evidence pag-evidence">
+              <span class="graph-name">PAG</span><h3>PAG Argument Flow</h3>
+              <p>Tracks how the path argument flows and is loaded inside <code id="pagFunction">is_valid_path</code>.</p>
+              <dl><div><dt>Query count</dt><dd id="pagQueryCount">—</dd></div><div><dt>Objective</dt><dd>argument flow</dd></div><div><dt>Seed</dt><dd id="pagSeed">ArgValVar —</dd></div></dl>
+            </article>
+            <article class="graph-evidence icfg-evidence">
+              <span class="graph-name">ICFG</span><h3>ICFG Control Flow</h3>
+              <p>Inspects local control flow from the function entry around the validation logic.</p>
+              <dl><div><dt>Query count</dt><dd id="icfgQueryCount">—</dd></div><div><dt>Objective</dt><dd>control flow</dd></div><div><dt>Seed</dt><dd id="icfgSeed">ICFG node —</dd></div></dl>
+            </article>
+            <article class="graph-evidence callgraph-evidence">
+              <span class="graph-name">CALLGRAPH</span><h3>CallGraph Neighborhood</h3>
+              <p>Finds callers and callees around the selected validation function.</p>
+              <dl><div><dt>Query count</dt><dd id="callgraphQueryCount">—</dd></div><div><dt>Objective</dt><dd>caller/callee context</dd></div><div><dt>Seed</dt><dd id="callgraphSeed">CallGraph node —</dd></div></dl>
+            </article>
+          </div>
+          <div class="retrieval-summary">
+            <div><span>Graphs touched</span><b id="graphsTouched">—</b></div>
+            <div><span>Stop reason</span><b id="stopReason">—</b></div>
+            <div><span>Objective met</span><b id="objectiveMet">—</b></div>
+            <div><span>Path count</span><b id="pathCount">—</b></div>
+          </div>
+        </section>
+
+        <div class="two-card-grid">
+          <section class="v122-card global-summary-card">
+            <div class="card-heading compact">
+              <div><span class="section-number">SUMMARY / 05</span><h2>Global Summary</h2></div>
+            </div>
+            <dl class="summary-list">
+              <div><dt>Stop reason</dt><dd id="summaryStop">—</dd></div>
+              <div><dt>Graphs touched</dt><dd id="summaryGraphs">—</dd></div>
+              <div><dt>Queries by graph type</dt><dd id="summaryQueries">—</dd></div>
+            </dl>
+            <details class="raw-viewer">
+              <summary>View raw global summary JSON</summary>
+              <pre id="globalSummaryRaw">Run the demo to load the global summary artifact.</pre>
+            </details>
+          </section>
+
+          <section class="v122-card diagnosis-card">
+            <div class="card-heading compact">
+              <div><span class="section-number">DIAGNOSIS / 06</span><h2>Fault Diagnosis</h2></div>
+              <span id="diagnosisStatus">—</span>
+            </div>
+            <div id="diagnosisPreview" class="markdown-view">Run the demo to inspect the evidence-grounded diagnosis.</div>
+            <button id="viewDiagnosis" class="secondary-button" type="button" disabled>View full diagnosis</button>
+            <pre id="fullDiagnosis" class="full-diagnosis hidden"></pre>
+          </section>
+        </div>
+
+        <section class="v122-card patch-card">
+          <div class="card-heading">
+            <div><span class="section-number">PATCH / 07</span><h2>Validated Patch</h2></div>
+            <div class="patch-badges"><span id="patchStatus">—</span><span id="patchValidation">—</span></div>
+          </div>
+          <p class="patch-provenance">CodeGraphHunter generated a validated patch from graph-guided diagnosis and a structured repair sketch.</p>
+          <pre id="patchDiff" class="v122-diff"><span class="diff-placeholder">Run the demo to display the validated source diff.</span></pre>
+        </section>
+
+        <section class="v122-card artifacts-card">
+          <div class="card-heading">
+            <div><span class="section-number">ARTIFACTS / 08</span><h2>Run Artifacts</h2></div>
+            <span class="restricted-badge">RESTRICTED READ ACCESS</span>
+          </div>
+          <div id="artifactPaths" class="artifact-paths"></div>
+          <div id="artifactPreview" class="artifact-preview hidden">
+            <div><b id="artifactPreviewName">Artifact</b><button id="closeArtifactPreview" type="button">Close</button></div>
+            <pre id="artifactPreviewContent"></pre>
+          </div>
+        </section>
+      </section>
+
+      <footer class="v122-footer">
+        <p>CodeGraphHunter generated a validated patch from graph-guided diagnosis and a structured repair sketch.</p>
+      </footer>
+    </main>
+    <script src="/assets/demo-v122.js" defer></script>
+  </body>
+</html>

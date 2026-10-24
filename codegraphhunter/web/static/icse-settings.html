@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>CodeGraphHunter · APG Settings</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/demo-v122.css" />
+    <link rel="stylesheet" href="/assets/icse-demo.css" />
+  </head>
+  <body class="demo-v122-page icse-demo-page">
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell demo-shell">
+      <header class="topbar">
+        <a class="brand" href="/icse-demo" aria-label="CodeGraphHunter APG">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span>CodeGraph Hunter<span> APG</span></span>
+        </a>
+        <div class="topbar-right">
+          <nav class="mode-nav" aria-label="Analysis modes">
+            <a href="/">Build DB</a><a class="active" href="/icse-demo">APG</a>
+          </nav>
+          <div class="icse-header-tools">
+            <div class="icse-config-status" role="status" aria-live="polite">
+              <div class="icse-config-indicators">
+                <span class="icse-config-item"><span id="icseDbLight" class="icse-config-light checking" role="img" aria-label="Checking Graph DB configuration" title="Checking Graph DB configuration"></span><span>Graph DB</span></span>
+                <span class="icse-config-item"><span id="icseApiLight" class="icse-config-light checking" role="img" aria-label="Checking OpenAI API key configuration" title="Checking OpenAI API key configuration"></span><span>OpenAI API key</span></span>
+              </div>
+              <a id="icseConfigPrompt" class="icse-config-prompt hidden" href="/icse-demo/settings"></a>
+            </div>
+            <a class="icse-settings-button" aria-current="page" href="/icse-demo/settings" aria-label="APG settings" title="APG settings">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><polygon points="18.84,9.17 19.24,10.46 21.65,10.30 21.65,13.70 19.24,13.54 18.84,14.83 18.84,14.83 18.21,16.03 20.03,17.62 17.62,20.03 16.03,18.21 14.83,18.84 14.83,18.84 13.54,19.24 13.70,21.65 10.30,21.65 10.46,19.24 9.17,18.84 9.17,18.84 7.97,18.21 6.38,20.03 3.97,17.62 5.79,16.03 5.16,14.83 5.16,14.83 4.76,13.54 2.35,13.70 2.35,10.30 4.76,10.46 5.16,9.17 5.16,9.17 5.79,7.97 3.97,6.38 6.38,3.97 7.97,5.79 9.17,5.16 9.17,5.16 10.46,4.76 10.30,2.35 13.70,2.35 13.54,4.76 14.83,5.16 14.83,5.16 16.03,5.79 17.62,3.97 20.03,6.38 18.21,7.97 18.84,9.17"/><circle cx="12" cy="12" r="3.2"/></svg>
+            </a>
+          </div>
+        </div>
+      </header>
+      <nav class="graph-menu" aria-label="APG pages">
+        <span class="graph-menu-label">GRAPH WORKSPACE</span>
+        <a href="/icse-demo">APG overview</a>
+        <a href="/icse-demo/query/icfg"><i>01</i> Query on ICFG</a>
+        <a href="/icse-demo/query/pag"><i>02</i> Query on PAG</a>
+        <a href="/icse-demo/query/callgraph"><i>03</i> Query on CallGraph</a>
+        <a id="navCapabilities" href="/icse-demo/query/capabilities"><i>04</i> All capabilities</a>
+        <a class="active" href="/icse-demo/settings">Settings</a>
+      </nav>
+      <section class="icse-settings-hero">
+        <div class="eyebrow">APG CONFIGURATION</div>
+        <h1>APG settings</h1>
+        <p>Configure the GPT API key and Graph DB connection used by your APG runs and queries.</p>
+      </section>
+      <div id="experimentConfigError" class="v122-error hidden" role="alert"></div>
+      <section id="experimentConfig" class="v122-card experiment-config" aria-labelledby="experimentConfigTitle">
+        <div class="card-heading">
+          <div><span class="section-number">RUN SETTINGS</span><h2 id="experimentConfigTitle">API &amp; Graph DB</h2></div>
+          <span class="input-badge">BROWSER SESSION</span>
+        </div>
+        <form id="experimentConfigForm" autocomplete="off">
+          <fieldset id="experimentConfigFields" disabled>
+            <div class="icse-api-settings">
+              <label for="experimentApiKey">GPT API key</label>
+              <input id="experimentApiKey" name="api_key" type="password" required autocomplete="new-password" spellcheck="false" maxlength="4096" placeholder="Enter your API key" aria-describedby="apiKeyHint" />
+              <p id="apiKeyHint">Loading saved settings…</p>
+              <p class="icse-secret-note">Credentials stay masked and are not saved in browser storage. Saved settings are kept temporarily on the server for this browser. Restarting the server clears them.</p>
+            </div>
+            <div class="icse-db-settings">
+              <div class="icse-uri-field">
+                <label for="experimentGraphUri">Graph DB Bolt URI</label>
+                <input id="experimentGraphUri" name="graphdb_uri" type="text" required spellcheck="false" maxlength="2048" value="bolt://localhost:7687" />
+              </div>
+              <div>
+                <label for="experimentGraphUser">Graph DB username</label>
+                <input id="experimentGraphUser" name="graphdb_user" type="text" required spellcheck="false" maxlength="256" value="admin" />
+              </div>
+              <div>
+                <label for="experimentGraphPassword">Graph DB password</label>
+                <input id="experimentGraphPassword" name="graphdb_password" type="password" required autocomplete="new-password" maxlength="4096" placeholder="Enter your database password" aria-describedby="graphPasswordHint" />
+              </div>
+              <p id="graphPasswordHint">Use an existing TuGraph instance containing PAG, ICFG, and CallGraph.</p>
+            </div>
+          </fieldset>
+          <div class="icse-config-footer">
+            <span id="experimentConfigStatus" role="status">Loading settings…</span>
+            <div class="icse-settings-actions">
+              <a href="/icse-demo">Back to APG</a>
+              <button id="saveExperimentConfig" class="primary-button" type="submit" disabled><span>Save and return to APG</span><i aria-hidden="true">→</i></button>
+            </div>
+          </div>
+        </form>
+      </section>
+      <section class="v122-card icse-runtime" aria-labelledby="runtimeTitle">
+        <div class="card-heading">
+          <div><span class="section-number">RUNTIME</span><h2 id="runtimeTitle">Runtime information</h2></div>
+        </div>
+        <dl>
+          <div><dt>Runner version</dt><dd id="runtimeVersion">Loading…</dd></div>
+          <div><dt>Runner executable</dt><dd><code id="runtimeRunner">Loading…</code></dd></div>
+        </dl>
+      </section>
+    </main>
+    <script src="/assets/icse-header.js" defer></script>
+    <script src="/assets/icse-settings.js" defer></script>
+  </body>
+</html>
